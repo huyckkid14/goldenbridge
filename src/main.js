@@ -1257,9 +1257,18 @@ function updateCamera() {
   controls.enabled = false;
   const car = state.driverCar;
   if (state.pov === "drive" && state.drive.camera === "normal") {
-    controls.enabled = true;
-    controls.target.lerp(car.position, 0.14);
-    controls.update();
+    const chaseForward = new THREE.Vector3(Math.sin(car.rotation.y), 0, Math.cos(car.rotation.y));
+    const chasePosition = car.position
+      .clone()
+      .add(new THREE.Vector3(0, 8.5, 0))
+      .add(chaseForward.clone().multiplyScalar(-17));
+    camera.position.lerp(chasePosition, 0.14);
+    camera.lookAt(
+      car.position
+        .clone()
+        .add(chaseForward.multiplyScalar(15))
+        .add(new THREE.Vector3(0, 1.4, 0)),
+    );
     return;
   }
 
@@ -1286,14 +1295,11 @@ function setDriveCamera(cameraMode) {
 
   if (external && state.pov === "drive") {
     const car = state.driverCar;
-    camera.position.set(
-      car.position.x - car.userData.dir * 48,
-      car.position.y + 32,
-      car.position.z + 46,
-    );
-    controls.target.copy(car.position);
-    controls.enabled = true;
-    controls.update();
+    const forward = new THREE.Vector3(Math.sin(car.rotation.y), 0, Math.cos(car.rotation.y));
+    camera.position
+      .copy(car.position)
+      .add(new THREE.Vector3(0, 8.5, 0))
+      .add(forward.multiplyScalar(-17));
   }
 }
 
