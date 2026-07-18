@@ -7,6 +7,7 @@ const hintEl = document.querySelector("#hint");
 const cockpitEl = document.querySelector("#driverCockpit");
 const driveHelpEl = document.querySelector("#driveHelp");
 const driveCameraButton = document.querySelector("#driveCameraButton");
+const ambulanceButton = document.querySelector("#ambulanceButton");
 const steeringWheelEl = document.querySelector(".wheel");
 const fpsOverlay = document.querySelector("#fpsOverlay");
 
@@ -77,6 +78,7 @@ const state = {
     keys: new Set(),
     collisionCooldown: new Map(),
     camera: "dash",
+    ambulance: false,
   },
 };
 
@@ -436,6 +438,10 @@ function createTraffic() {
         targetLane: null,
         targetZ: lane.z,
         signalLights: car.userData.signalLights,
+        bodyMaterial: car.userData.bodyMaterial,
+        originalBodyColor: car.userData.originalBodyColor,
+        ambulanceRig: car.userData.ambulanceRig,
+        ambulanceLights: car.userData.ambulanceLights,
         isDriver: false,
         length: car.userData.length,
         mass: car.userData.mass,
@@ -491,6 +497,8 @@ function createCar(color, truck = false) {
   const length = truck ? 9.8 : 6.2;
   group.userData.length = length;
   group.userData.mass = truck ? 1.85 : 1;
+  group.userData.bodyMaterial = bodyMat;
+  group.userData.originalBodyColor = color;
   const height = truck ? 2.6 : 1.65;
   const body = makeMesh(
     new THREE.BoxGeometry(3.2, height, length),
@@ -513,6 +521,38 @@ function createCar(color, truck = false) {
       ),
     );
   }
+
+  const ambulanceRig = new THREE.Group();
+  const ambulanceWhite = new THREE.MeshStandardMaterial({ color: 0xf7f7f2, roughness: 0.38 });
+  const ambulanceRed = new THREE.MeshStandardMaterial({ color: 0xd62424, roughness: 0.35 });
+  const redLight = new THREE.MeshStandardMaterial({
+    color: 0xff2424,
+    emissive: 0xff1010,
+    emissiveIntensity: 0.25,
+  });
+  const blueLight = new THREE.MeshStandardMaterial({
+    color: 0x2570ff,
+    emissive: 0x1555ff,
+    emissiveIntensity: 0.25,
+  });
+  ambulanceRig.add(
+    makeMesh(
+      new THREE.BoxGeometry(3.38, 2.55, length * 0.58),
+      ambulanceWhite,
+      new THREE.Vector3(0, 2.05, length * 0.08),
+    ),
+    makeMesh(
+      new THREE.BoxGeometry(3.48, 0.42, length * 0.63),
+      ambulanceRed,
+      new THREE.Vector3(0, 1.55, length * 0.08),
+    ),
+    makeMesh(new THREE.BoxGeometry(1.25, 0.34, 0.7), redLight, new THREE.Vector3(-0.72, 3.55, -0.7)),
+    makeMesh(new THREE.BoxGeometry(1.25, 0.34, 0.7), blueLight, new THREE.Vector3(0.72, 3.55, -0.7)),
+  );
+  ambulanceRig.visible = false;
+  group.userData.ambulanceRig = ambulanceRig;
+  group.userData.ambulanceLights = { red: redLight, blue: blueLight };
+  group.add(ambulanceRig);
 
   const wheelGeo = new THREE.CylinderGeometry(0.62, 0.62, 0.42, 16);
   [-length * 0.31, length * 0.31].forEach((z) => {
@@ -593,6 +633,7 @@ function setDriveMode(enabled) {
   }
 
   const data = car.userData;
+  setAmbulanceMode(false);
   data.dir = Math.sin(data.driveHeading) >= 0 ? 1 : -1;
   const nearestLane = state.lanes
     .filter((lane) => lane.dir === data.dir)
@@ -614,6 +655,15 @@ function setDriveMode(enabled) {
   data.driveHeading = null;
   steeringWheelEl.style.transform = "";
   if (!nearestLane.cars.includes(car)) nearestLane.cars.push(car);
+}
+
+function setAmbulanceMode(enabled) {
+  const data = state.driverCar.userData;
+  state.drive.ambulance = enabled;
+  data.bodyMaterial.color.setHex(enabled ? 0xffffff : data.originalBodyColor);
+  data.ambulanceRig.visible = enabled;
+  ambulanceButton.textContent = enabled ? "Ambulance: ON" : "Ambulance: Off";
+  ambulanceButton.classList.toggle("emergency-active", enabled);
 }
 
 function updatePlayerDriving(delta) {
@@ -833,6 +883,8 @@ function updateDriverAvoidance() {
   const player = state.driverCar;
   const playerData = player.userData;
 
+  if (state.drive.ambulance) updateAmbulanceClearance();
+
   state.cars.forEach((car) => {
     if (car === player) return;
     const data = car.userData;
@@ -854,6 +906,45 @@ function updateDriverAvoidance() {
       if (longitudinal < 22) data.targetSpeed = 0;
     }
   });
+}
+
+function updateAmbulanceClearance() {
+  const player = state.driverCar;
+  const data = player.userData;
+  const forwardX = Math.sin(data.driveHeading);
+  const forwardZ = Math.cos(data.driveHeading);
+
+  state.cars.forEach((car) => {
+    if (car === player) return;
+    const dx = car.position.x - player.position.x;
+    const dz = car.position.z - player.position.z;
+    const ahead = dx * forwardX + dz * forwardZ;
+    const lateral = Math.abs(dx * forwardZ - dz * forwardX);
+    if (ahead <= 0 || ahead > 145 || lateral > 18) return;
+
+    const carData = car.userData;
+    const currentLane = state.lanes[carData.lane];
+    const targetLane = currentLane?.neighbor;
+    const targetMovesAway = targetLane
+      && Math.abs(targetLane.z - data.currentZ) > Math.abs(currentLane.z - data.currentZ);
+
+    if (!carData.changingLane && targetMovesAway && isLaneGapClear(car, targetLane)) {
+      startLaneChange(car, targetLane);
+      carData.targetSpeed = Math.min(carData.targetSpeed, carData.baseSpeed * 0.9);
+    } else {
+      const brakingDistance = THREE.MathUtils.clamp(ahead / 110, 0, 1);
+      carData.targetSpeed = Math.min(carData.targetSpeed, carData.baseSpeed * brakingDistance * 0.55);
+      if (ahead < 38) carData.targetSpeed = 0;
+    }
+  });
+}
+
+function updateAmbulanceLights() {
+  const data = state.driverCar.userData;
+  if (!state.drive.ambulance) return;
+  const redOn = Math.sin(clock.elapsedTime * 18) > 0;
+  data.ambulanceLights.red.emissiveIntensity = redOn ? 3.2 : 0.18;
+  data.ambulanceLights.blue.emissiveIntensity = redOn ? 0.18 : 3.2;
 }
 
 function easeTrafficSpeeds(delta) {
@@ -1209,6 +1300,7 @@ function updateTraffic(delta) {
   updatePlayerDriving(delta);
   updateCollisionPhysics(delta);
   updateTurnIndicators();
+  updateAmbulanceLights();
   state.cars.forEach((car) => updateCarPosition(car, 0));
 }
 
@@ -1442,6 +1534,11 @@ function bindControls() {
 
   driveCameraButton.addEventListener("click", () => {
     setDriveCamera(state.drive.camera === "dash" ? "normal" : "dash");
+    playControlClick();
+  });
+
+  ambulanceButton.addEventListener("click", () => {
+    setAmbulanceMode(!state.drive.ambulance);
     playControlClick();
   });
 }

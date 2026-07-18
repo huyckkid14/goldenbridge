@@ -216,6 +216,12 @@ p,
   font-size: 0.75rem;
 }
 
+.drive-help button.emergency-active {
+  color: #fff;
+  background: linear-gradient(90deg, #d72727, #235bd8);
+  border-color: #fff;
+}
+
 .driver-cockpit {
   position: fixed;
   inset: 0;
