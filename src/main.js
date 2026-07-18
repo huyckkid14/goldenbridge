@@ -784,6 +784,18 @@ function isLaneGapClear(car, lane) {
   ));
 }
 
+function requestAmbulanceMergeGap(car, targetLane) {
+  targetLane.cars.forEach((other) => {
+    if (other === car || other === state.driverCar) return;
+    const distanceBehind = progressDistanceAhead(other, car);
+    if (distanceBehind > 0.12) return;
+
+    const urgency = THREE.MathUtils.clamp(1 - distanceBehind / 0.12, 0, 1);
+    const cooperativeSpeed = other.userData.baseSpeed * THREE.MathUtils.lerp(0.82, 0.42, urgency);
+    other.userData.targetSpeed = Math.min(other.userData.targetSpeed, cooperativeSpeed);
+  });
+}
+
 function getAmbulanceLaneId() {
   const ambulanceZ = state.driverCar.userData.currentZ;
   return state.lanes.reduce((nearest, lane) => (
@@ -972,6 +984,10 @@ function updateAmbulanceClearance() {
     const targetMovesAway = targetLane
       && targetLane.id !== protectedLaneId
       && Math.abs(targetLane.z - data.currentZ) > Math.abs(currentLane.z - data.currentZ);
+
+    if (!carData.changingLane && targetMovesAway) {
+      requestAmbulanceMergeGap(car, targetLane);
+    }
 
     if (!carData.changingLane && targetMovesAway && isLaneGapClear(car, targetLane)) {
       startLaneChange(car, targetLane);
