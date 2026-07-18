@@ -6,6 +6,7 @@ const statusEl = document.querySelector("#status");
 const hintEl = document.querySelector("#hint");
 const cockpitEl = document.querySelector("#driverCockpit");
 const driveHelpEl = document.querySelector("#driveHelp");
+const driveCameraButton = document.querySelector("#driveCameraButton");
 const fpsOverlay = document.querySelector("#fpsOverlay");
 
 const scene = new THREE.Scene();
@@ -74,6 +75,7 @@ const state = {
   drive: {
     keys: new Set(),
     collisionCooldown: new Map(),
+    camera: "dash",
   },
 };
 
@@ -1254,6 +1256,13 @@ function updateCamera() {
 
   controls.enabled = false;
   const car = state.driverCar;
+  if (state.pov === "drive" && state.drive.camera === "normal") {
+    controls.enabled = true;
+    controls.target.lerp(car.position, 0.14);
+    controls.update();
+    return;
+  }
+
   const forward = new THREE.Vector3(Math.sin(car.rotation.y), 0, Math.cos(car.rotation.y));
   const side = new THREE.Vector3(Math.cos(car.rotation.y), 0, -Math.sin(car.rotation.y));
   camera.position
@@ -1269,6 +1278,25 @@ function updateCamera() {
   );
 }
 
+function setDriveCamera(cameraMode) {
+  state.drive.camera = cameraMode;
+  const external = cameraMode === "normal";
+  driveCameraButton.textContent = external ? "Camera: Normal" : "Camera: Dash";
+  cockpitEl.classList.toggle("active", state.pov === "driver" || (state.pov === "drive" && !external));
+
+  if (external && state.pov === "drive") {
+    const car = state.driverCar;
+    camera.position.set(
+      car.position.x - car.userData.dir * 48,
+      car.position.y + 32,
+      car.position.z + 46,
+    );
+    controls.target.copy(car.position);
+    controls.enabled = true;
+    controls.update();
+  }
+}
+
 function bindControls() {
   document.querySelector("#povControls").addEventListener("click", (event) => {
     const button = event.target.closest("button");
@@ -1280,7 +1308,7 @@ function bindControls() {
     if (wasDriving !== (state.pov === "drive")) setDriveMode(state.pov === "drive");
     statusEl.textContent = `${button.textContent} POV`;
     const inCar = state.pov === "driver" || state.pov === "drive";
-    cockpitEl.classList.toggle("active", inCar);
+    cockpitEl.classList.toggle("active", inCar && (state.pov !== "drive" || state.drive.camera === "dash"));
     driveHelpEl.classList.toggle("active", state.pov === "drive");
     driveHelpEl.setAttribute("aria-hidden", String(state.pov !== "drive"));
     hintEl.textContent = state.pov === "drive"
@@ -1307,9 +1335,19 @@ function bindControls() {
     button.textContent = nextEnabled ? "Sound On" : "Sound Off";
     playControlClick();
   });
+
+  driveCameraButton.addEventListener("click", () => {
+    setDriveCamera(state.drive.camera === "dash" ? "normal" : "dash");
+    playControlClick();
+  });
 }
 
 function setDriveKey(event, pressed) {
+  if (event.code === "KeyC" && pressed && !event.repeat && state.pov === "drive") {
+    event.preventDefault();
+    setDriveCamera(state.drive.camera === "dash" ? "normal" : "dash");
+    return;
+  }
   const driveKeys = ["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowLeft", "ArrowDown", "ArrowRight"];
   if (!driveKeys.includes(event.code)) return;
   if (state.pov === "drive") event.preventDefault();

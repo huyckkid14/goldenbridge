@@ -207,6 +207,15 @@ p,
   font-size: 0.78rem;
 }
 
+.drive-help button {
+  min-height: 2rem;
+  padding: 0.35rem 0.55rem;
+  color: #101820;
+  background: #ffd15c;
+  border-color: #ffe8a6;
+  font-size: 0.75rem;
+}
+
 .driver-cockpit {
   position: fixed;
   inset: 0;
