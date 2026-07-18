@@ -28,9 +28,10 @@
     <aside class="hud panel" aria-label="Scene controls">
       <section>
         <h2>POV</h2>
-        <div class="control-grid two" id="povControls">
+        <div class="control-grid three" id="povControls">
           <button class="active" data-pov="normal">Normal</button>
           <button data-pov="driver">Driver</button>
+          <button class="drive-button" data-pov="drive">Drive URSELF</button>
         </div>
       </section>
 
@@ -53,6 +54,12 @@
     </aside>
 
     <div class="hint" id="hint">Drag to move. Scroll to zoom.</div>
+    <div class="drive-help" id="driveHelp" aria-hidden="true">
+      <strong>YOU DRIVE</strong>
+      <span>W / ↑ accelerate</span>
+      <span>S / ↓ brake</span>
+      <span>A D / ← → steer</span>
+    </div>
     <div class="fps-overlay" id="fpsOverlay">FPS 0</div>
 
     <div class="driver-cockpit" id="driverCockpit" aria-hidden="true">
@@ -68,6 +75,6 @@
       </div>
     </div>
 
-    <script type="module" src="./src/main.js?v=19"></script>
+    <script type="module" src="./src/main.js?v=20"></script>
   </body>
 </html>

@@ -5,6 +5,7 @@ const canvas = document.querySelector("#scene");
 const statusEl = document.querySelector("#status");
 const hintEl = document.querySelector("#hint");
 const cockpitEl = document.querySelector("#driverCockpit");
+const driveHelpEl = document.querySelector("#driveHelp");
 const fpsOverlay = document.querySelector("#fpsOverlay");
 
 const scene = new THREE.Scene();
@@ -70,6 +71,10 @@ const state = {
   ambient: null,
   hemi: null,
   driverCar: null,
+  drive: {
+    keys: new Set(),
+    collisionCooldown: new Map(),
+  },
 };
 
 const mats = {
@@ -430,6 +435,10 @@ function createTraffic() {
         signalLights: car.userData.signalLights,
         isDriver: false,
         length: car.userData.length,
+        physicsZ: 0,
+        physicsZVelocity: 0,
+        spin: 0,
+        spinVelocity: 0,
       };
       updateCarPosition(car, 0);
       state.cars.push(car);
@@ -550,8 +559,62 @@ function updateCarPosition(car, delta) {
   data.progress = (data.progress + delta * data.speed * state.trafficSpeed * data.dir) % 1;
   const laneZ = data.currentZ ?? data.z;
   const point = trafficPoint(data.progress, laneZ);
-  car.position.set(point.x, point.y, point.z);
-  car.rotation.y = data.dir === 1 ? point.heading : point.heading + Math.PI;
+  car.position.set(point.x, point.y, point.z + (data.physicsZ ?? 0));
+  car.rotation.y = (data.dir === 1 ? point.heading : point.heading + Math.PI) + (data.spin ?? 0);
+}
+
+function setDriveMode(enabled) {
+  const car = state.driverCar;
+  if (enabled) {
+    state.lanes.forEach((lane) => {
+      lane.cars = lane.cars.filter((item) => item !== car);
+    });
+    car.userData.changingLane = false;
+    car.userData.targetLane = null;
+    car.userData.currentZ = car.position.z;
+    car.userData.speed = Math.max(car.userData.speed, 0.035);
+    return;
+  }
+
+  const data = car.userData;
+  const nearestLane = state.lanes
+    .filter((lane) => lane.dir === data.dir)
+    .sort((a, b) => Math.abs(a.z - data.currentZ) - Math.abs(b.z - data.currentZ))[0];
+  data.lane = nearestLane.id;
+  data.z = nearestLane.z;
+  data.currentZ = nearestLane.z;
+  data.baseSpeed = nearestLane.speed;
+  data.targetSpeed = nearestLane.speed;
+  data.physicsZ = 0;
+  data.physicsZVelocity = 0;
+  data.spin = 0;
+  data.spinVelocity = 0;
+  if (!nearestLane.cars.includes(car)) nearestLane.cars.push(car);
+}
+
+function updatePlayerDriving(delta) {
+  if (state.pov !== "drive") return;
+
+  const data = state.driverCar.userData;
+  const keys = state.drive.keys;
+  const accelerating = keys.has("KeyW") || keys.has("ArrowUp");
+  const braking = keys.has("KeyS") || keys.has("ArrowDown");
+  const steer = Number(keys.has("KeyD") || keys.has("ArrowRight"))
+    - Number(keys.has("KeyA") || keys.has("ArrowLeft"));
+
+  if (accelerating) data.speed = Math.min(data.speed + delta * 0.055, 0.105);
+  else data.speed = Math.max(data.speed - delta * 0.012, 0.018);
+  if (braking) data.speed = Math.max(data.speed - delta * 0.1, 0);
+
+  data.progress = (data.progress + delta * data.speed * data.dir) % 1;
+  const steeringAuthority = THREE.MathUtils.lerp(3.2, 10.5, Math.min(data.speed / 0.08, 1));
+  data.currentZ = THREE.MathUtils.clamp(
+    data.currentZ + steer * data.dir * steeringAuthority * delta,
+    -14.2,
+    14.2,
+  );
+
+  statusEl.textContent = `YOU DRIVE · ${Math.round(data.speed * 760)} mph`;
 }
 
 function circularDistance(a, b) {
@@ -617,6 +680,7 @@ function finishLaneChange(car) {
 
 function updateLaneChangeIntent(car, delta) {
   const data = car.userData;
+  if (car === state.driverCar && state.pov === "drive") return;
   if (data.changingLane) return;
 
   data.cooldown -= delta;
@@ -633,6 +697,7 @@ function updateLaneChangeIntent(car, delta) {
 
 function updateLaneChangeMotion(car, delta) {
   const data = car.userData;
+  if (car === state.driverCar && state.pov === "drive") return;
   if (!data.changingLane) {
     data.currentZ = data.z;
     return;
@@ -667,6 +732,7 @@ function updateTurnIndicators() {
 
 function updateYieldingSpeeds() {
   state.cars.forEach((car) => {
+    if (car === state.driverCar && state.pov === "drive") return;
     const data = car.userData;
     const lane = state.lanes[data.lane];
     const nearestAhead = lane.cars.reduce((nearest, other) => {
@@ -684,6 +750,8 @@ function updateYieldingSpeeds() {
     data.targetSpeed = data.baseSpeed * cruiseMultiplier;
   });
 
+  if (state.pov === "drive") updateDriverAvoidance();
+
   state.cars.forEach((mergingCar) => {
     const merge = mergingCar.userData;
     if (!merge.changingLane || merge.targetLane === null) return;
@@ -692,8 +760,36 @@ function updateYieldingSpeeds() {
   });
 }
 
+function updateDriverAvoidance() {
+  const player = state.driverCar;
+  const playerData = player.userData;
+
+  state.cars.forEach((car) => {
+    if (car === player) return;
+    const data = car.userData;
+    const longitudinal = (player.position.x - car.position.x) * data.dir;
+    const lateral = Math.abs((playerData.currentZ + playerData.physicsZ) - (data.currentZ + data.physicsZ));
+    if (longitudinal <= 0 || longitudinal > 72 || lateral > 8.5) return;
+
+    const urgency = THREE.MathUtils.clamp(1 - longitudinal / 72, 0, 1);
+    const targetLane = state.lanes[data.lane]?.neighbor;
+    const canEvade = targetLane
+      && !data.changingLane
+      && Math.abs(targetLane.z - playerData.currentZ) > 5.5
+      && isLaneGapClear(car, targetLane);
+
+    if (canEvade && longitudinal < 48) {
+      startLaneChange(car, targetLane);
+    } else {
+      data.targetSpeed = Math.min(data.targetSpeed, data.baseSpeed * (1 - urgency) * 0.7);
+      if (longitudinal < 22) data.targetSpeed = 0;
+    }
+  });
+}
+
 function easeTrafficSpeeds(delta) {
   state.cars.forEach((car) => {
+    if (car === state.driverCar && state.pov === "drive") return;
     const data = car.userData;
     const easing = data.targetSpeed < data.speed ? 0.7 : 1.15;
     data.speed = THREE.MathUtils.lerp(data.speed, data.targetSpeed, Math.min(delta * easing, 1));
@@ -780,6 +876,46 @@ function enforceHardLaneClearance(lane) {
     }
     if (!corrected) break;
   }
+}
+
+function updateCollisionPhysics(delta) {
+  state.cars.forEach((car) => {
+    const data = car.userData;
+    data.physicsZ += data.physicsZVelocity * delta;
+    data.physicsZVelocity += (-data.physicsZ * 8 - data.physicsZVelocity * 4.5) * delta;
+    data.spin += data.spinVelocity * delta;
+    data.spinVelocity += (-data.spin * 7 - data.spinVelocity * 3.8) * delta;
+  });
+
+  if (state.pov !== "drive") return;
+  const player = state.driverCar;
+  state.cars.forEach((other) => {
+    if (other === player) return;
+    const dx = other.position.x - player.position.x;
+    const dz = other.position.z - player.position.z;
+    const xLimit = (player.userData.length + other.userData.length) * 0.5;
+    const zLimit = 3.35;
+    if (Math.abs(dx) >= xLimit || Math.abs(dz) >= zLimit) return;
+
+    const cooldown = state.drive.collisionCooldown.get(other) ?? 0;
+    if (clock.elapsedTime < cooldown) return;
+    state.drive.collisionCooldown.set(other, clock.elapsedTime + 0.38);
+
+    const side = Math.sign(dz) || (Math.random() < 0.5 ? -1 : 1);
+    const impact = THREE.MathUtils.clamp(
+      Math.abs(player.userData.speed - other.userData.speed) * 18 + 0.45,
+      0.45,
+      1.8,
+    );
+    other.userData.physicsZVelocity += side * 7.5 * impact;
+    other.userData.spinVelocity += side * 4.2 * impact;
+    other.userData.speed *= 0.48;
+    other.userData.progress += Math.sign(dx || player.userData.dir) * (xLimit - Math.abs(dx) + 0.4) / 368;
+
+    player.userData.physicsZVelocity -= side * 2.8 * impact;
+    player.userData.spinVelocity -= side * 1.35 * impact;
+    player.userData.speed *= 0.62;
+  });
 }
 
 function createTrees() {
@@ -964,11 +1100,14 @@ function updateTraffic(delta) {
   enforceTrafficClearance();
   easeTrafficSpeeds(delta);
   state.cars.forEach((car) => {
+    if (car === state.driverCar && state.pov === "drive") return;
     const data = car.userData;
     data.progress = (data.progress + delta * data.speed * state.trafficSpeed * data.dir) % 1;
   });
   state.lanes.forEach(enforceHardLaneClearance);
   state.cars.forEach((car) => updateLaneChangeMotion(car, delta));
+  updatePlayerDriving(delta);
+  updateCollisionPhysics(delta);
   updateTurnIndicators();
   state.cars.forEach((car) => updateCarPosition(car, 0));
 }
@@ -1086,9 +1225,10 @@ function updateAudio(delta) {
   const targetEngine = 70 + carSpeed * 1450 + Math.sin(clock.elapsedTime * 5.5) * 4;
   const now = state.audio.context.currentTime;
   state.audio.engine.frequency.setTargetAtTime(targetEngine, now, 0.08);
-  state.audio.engineGain.gain.setTargetAtTime(state.pov === "driver" ? 0.18 : 0.09, now, 0.12);
-  state.audio.roadGain.gain.setTargetAtTime(state.pov === "driver" ? 0.08 : 0.035, now, 0.12);
-  state.audio.windGain.gain.setTargetAtTime(state.pov === "driver" ? 0.03 : 0.016, now, 0.12);
+  const inCar = state.pov === "driver" || state.pov === "drive";
+  state.audio.engineGain.gain.setTargetAtTime(inCar ? 0.18 : 0.09, now, 0.12);
+  state.audio.roadGain.gain.setTargetAtTime(inCar ? 0.08 : 0.035, now, 0.12);
+  state.audio.windGain.gain.setTargetAtTime(inCar ? 0.03 : 0.016, now, 0.12);
 }
 
 function updateEnvironment(delta) {
@@ -1135,10 +1275,17 @@ function bindControls() {
     if (!button) return;
     document.querySelectorAll("[data-pov]").forEach((item) => item.classList.remove("active"));
     button.classList.add("active");
+    const wasDriving = state.pov === "drive";
     state.pov = button.dataset.pov;
+    if (wasDriving !== (state.pov === "drive")) setDriveMode(state.pov === "drive");
     statusEl.textContent = `${button.textContent} POV`;
-    cockpitEl.classList.toggle("active", state.pov === "driver");
-    hintEl.textContent = state.pov === "driver" ? "Driver dashboard POV" : "Drag to move. Scroll to zoom.";
+    const inCar = state.pov === "driver" || state.pov === "drive";
+    cockpitEl.classList.toggle("active", inCar);
+    driveHelpEl.classList.toggle("active", state.pov === "drive");
+    driveHelpEl.setAttribute("aria-hidden", String(state.pov !== "drive"));
+    hintEl.textContent = state.pov === "drive"
+      ? "WASD or arrow keys to drive"
+      : (state.pov === "driver" ? "Driver dashboard POV" : "Drag to move. Scroll to zoom.");
     playControlClick();
   });
 
@@ -1160,6 +1307,14 @@ function bindControls() {
     button.textContent = nextEnabled ? "Sound On" : "Sound Off";
     playControlClick();
   });
+}
+
+function setDriveKey(event, pressed) {
+  const driveKeys = ["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowLeft", "ArrowDown", "ArrowRight"];
+  if (!driveKeys.includes(event.code)) return;
+  if (state.pov === "drive") event.preventDefault();
+  if (pressed) state.drive.keys.add(event.code);
+  else state.drive.keys.delete(event.code);
 }
 
 function onResize() {
@@ -1186,5 +1341,8 @@ createTraffic();
 applySetting("summer");
 bindControls();
 window.addEventListener("resize", onResize);
+window.addEventListener("keydown", (event) => setDriveKey(event, true));
+window.addEventListener("keyup", (event) => setDriveKey(event, false));
+window.addEventListener("blur", () => state.drive.keys.clear());
 setInterval(refreshFpsOverlay, 500);
 animate();
