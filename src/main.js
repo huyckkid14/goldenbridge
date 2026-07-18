@@ -429,6 +429,7 @@ function createTraffic() {
         targetZ: lane.z,
         signalLights: car.userData.signalLights,
         isDriver: false,
+        length: car.userData.length,
       };
       updateCarPosition(car, 0);
       state.cars.push(car);
@@ -469,6 +470,7 @@ function createCar(color, truck = false) {
     metalness: 0.16,
   });
   const length = truck ? 9.8 : 6.2;
+  group.userData.length = length;
   const height = truck ? 2.6 : 1.65;
   const body = makeMesh(
     new THREE.BoxGeometry(3.2, height, length),
@@ -565,8 +567,16 @@ function progressDistanceAhead(car, other) {
   return (data.progress - otherData.progress + 1) % 1;
 }
 
-function isLaneGapClear(car, lane, minGap = 0.055) {
-  return lane.cars.every((other) => other === car || circularDistance(car.userData.progress, other.userData.progress) > minGap);
+function minimumProgressGap(car, other, buffer = 3) {
+  const roadLength = 368;
+  return (car.userData.length / 2 + other.userData.length / 2 + buffer) / roadLength;
+}
+
+function isLaneGapClear(car, lane) {
+  return lane.cars.every((other) => (
+    other === car
+    || circularDistance(car.userData.progress, other.userData.progress) > minimumProgressGap(car, other, 5)
+  ));
 }
 
 function startLaneChange(car, targetLane) {
@@ -574,6 +584,11 @@ function startLaneChange(car, targetLane) {
   data.changingLane = true;
   data.changeT = 0;
   data.targetLane = targetLane.id;
+  // Reserve the destination immediately. This makes every following gap check
+  // and spacing pass account for the car throughout the entire merge.
+  if (!targetLane.cars.includes(car)) {
+    targetLane.cars.push(car);
+  }
   data.targetZ = targetLane.z;
   data.startZ = data.currentZ ?? data.z;
   const targetIsWorldRight = targetLane.z < data.startZ;
@@ -714,7 +729,9 @@ function enforceTrafficClearance() {
       const ad = a.userData;
       const bd = b.userData;
       if (ad.dir !== bd.dir) continue;
-      if (ad.lane !== bd.lane) continue;
+      const aLanes = [ad.lane, ad.targetLane];
+      const bLanes = [bd.lane, bd.targetLane];
+      if (!aLanes.some((laneId) => laneId !== null && bLanes.includes(laneId))) continue;
 
       const gap = circularDistance(ad.progress, bd.progress);
       if (gap >= minProgressGap) continue;
@@ -728,6 +745,40 @@ function enforceTrafficClearance() {
       const safeSpeed = THREE.MathUtils.lerp(trailingData.baseSpeed, trailingData.baseSpeed * 0.58, blend);
       trailingData.targetSpeed = Math.min(trailingData.targetSpeed, safeSpeed);
     }
+  }
+}
+
+function enforceHardLaneClearance(lane) {
+  if (lane.cars.length < 2) return;
+
+  // Work in a coordinate that always increases in the lane's travel direction.
+  // If easing cannot slow a trailing car quickly enough, move it back to the
+  // nearest physically safe point before rendering the frame.
+  for (let pass = 0; pass < lane.cars.length; pass += 1) {
+    const cars = lane.cars
+      .map((car) => {
+        const progress = ((car.userData.progress % 1) + 1) % 1;
+        return { car, travel: lane.dir === 1 ? progress : (1 - progress) % 1 };
+      })
+      .sort((a, b) => a.travel - b.travel);
+
+    let corrected = false;
+    for (let i = 0; i < cars.length; i += 1) {
+      const trailing = cars[i];
+      const leading = cars[(i + 1) % cars.length];
+      const leadingTravel = leading.travel + (i === cars.length - 1 ? 1 : 0);
+      const requiredGap = minimumProgressGap(trailing.car, leading.car);
+      if (leadingTravel - trailing.travel >= requiredGap) continue;
+
+      const safeTravel = ((leadingTravel - requiredGap) % 1 + 1) % 1;
+      trailing.car.userData.progress = lane.dir === 1 ? safeTravel : (1 - safeTravel) % 1;
+      trailing.car.userData.speed = Math.min(
+        trailing.car.userData.speed,
+        leading.car.userData.speed,
+      );
+      corrected = true;
+    }
+    if (!corrected) break;
   }
 }
 
@@ -916,6 +967,7 @@ function updateTraffic(delta) {
     const data = car.userData;
     data.progress = (data.progress + delta * data.speed * state.trafficSpeed * data.dir) % 1;
   });
+  state.lanes.forEach(enforceHardLaneClearance);
   state.cars.forEach((car) => updateLaneChangeMotion(car, delta));
   updateTurnIndicators();
   state.cars.forEach((car) => updateCarPosition(car, 0));
