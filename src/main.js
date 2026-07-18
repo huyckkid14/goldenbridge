@@ -437,10 +437,16 @@ function createTraffic() {
         signalLights: car.userData.signalLights,
         isDriver: false,
         length: car.userData.length,
+        mass: car.userData.mass,
+        physicsXVelocity: 0,
         physicsZ: 0,
         physicsZVelocity: 0,
         spin: 0,
         spinVelocity: 0,
+        driveSteer: 0,
+        driveThrottle: 0,
+        driveLateralVelocity: 0,
+        driveHeading: null,
       };
       updateCarPosition(car, 0);
       state.cars.push(car);
@@ -482,6 +488,7 @@ function createCar(color, truck = false) {
   });
   const length = truck ? 9.8 : 6.2;
   group.userData.length = length;
+  group.userData.mass = truck ? 1.85 : 1;
   const height = truck ? 2.6 : 1.65;
   const body = makeMesh(
     new THREE.BoxGeometry(3.2, height, length),
@@ -562,7 +569,8 @@ function updateCarPosition(car, delta) {
   const laneZ = data.currentZ ?? data.z;
   const point = trafficPoint(data.progress, laneZ);
   car.position.set(point.x, point.y, point.z + (data.physicsZ ?? 0));
-  car.rotation.y = (data.dir === 1 ? point.heading : point.heading + Math.PI) + (data.spin ?? 0);
+  const laneHeading = data.dir === 1 ? point.heading : point.heading + Math.PI;
+  car.rotation.y = (data.driveHeading ?? laneHeading) + (data.spin ?? 0);
 }
 
 function setDriveMode(enabled) {
@@ -575,6 +583,9 @@ function setDriveMode(enabled) {
     car.userData.targetLane = null;
     car.userData.currentZ = car.position.z;
     car.userData.speed = Math.max(car.userData.speed, 0.035);
+    car.userData.driveSteer = 0;
+    car.userData.driveThrottle = 0;
+    car.userData.driveHeading = car.rotation.y;
     return;
   }
 
@@ -588,9 +599,14 @@ function setDriveMode(enabled) {
   data.baseSpeed = nearestLane.speed;
   data.targetSpeed = nearestLane.speed;
   data.physicsZ = 0;
+  data.physicsXVelocity = 0;
   data.physicsZVelocity = 0;
   data.spin = 0;
   data.spinVelocity = 0;
+  data.driveSteer = 0;
+  data.driveThrottle = 0;
+  data.driveLateralVelocity = 0;
+  data.driveHeading = null;
   if (!nearestLane.cars.includes(car)) nearestLane.cars.push(car);
 }
 
@@ -601,22 +617,58 @@ function updatePlayerDriving(delta) {
   const keys = state.drive.keys;
   const accelerating = keys.has("KeyW") || keys.has("ArrowUp");
   const braking = keys.has("KeyS") || keys.has("ArrowDown");
-  const steer = Number(keys.has("KeyD") || keys.has("ArrowRight"))
+  const targetSteer = Number(keys.has("KeyD") || keys.has("ArrowRight"))
     - Number(keys.has("KeyA") || keys.has("ArrowLeft"));
 
-  if (accelerating) data.speed = Math.min(data.speed + delta * 0.055, 0.105);
-  else data.speed = Math.max(data.speed - delta * 0.012, 0.018);
-  if (braking) data.speed = Math.max(data.speed - delta * 0.1, 0);
+  const throttleTarget = accelerating && !braking ? 1 : 0;
+  data.driveThrottle = THREE.MathUtils.lerp(
+    data.driveThrottle,
+    throttleTarget,
+    1 - Math.exp(-delta * 4.5),
+  );
+  data.driveSteer = THREE.MathUtils.lerp(
+    data.driveSteer,
+    targetSteer,
+    1 - Math.exp(-delta * (targetSteer === 0 ? 8.5 : 5.5)),
+  );
+
+  if (braking) {
+    data.speed = Math.max(data.speed - delta * 0.13, 0);
+    data.physicsXVelocity *= Math.exp(-delta * 5.5);
+  } else if (accelerating) {
+    const acceleration = 0.025 + data.driveThrottle * 0.035;
+    data.speed = Math.min(data.speed + delta * acceleration, 0.105);
+  } else {
+    data.speed = Math.max(data.speed - delta * 0.009, 0);
+    if (data.speed < 0.0015) data.speed = 0;
+  }
 
   data.progress = (data.progress + delta * data.speed * data.dir) % 1;
-  const steeringAuthority = THREE.MathUtils.lerp(3.2, 10.5, Math.min(data.speed / 0.08, 1));
+  const speedBlend = THREE.MathUtils.clamp(data.speed / 0.075, 0, 1);
+  const steeringAuthority = THREE.MathUtils.lerp(0, 10.2, speedBlend);
+  data.driveLateralVelocity = data.driveSteer * data.dir * steeringAuthority;
   data.currentZ = THREE.MathUtils.clamp(
-    data.currentZ + steer * data.dir * steeringAuthority * delta,
+    data.currentZ + data.driveLateralVelocity * delta,
     -14.2,
     14.2,
   );
 
-  statusEl.textContent = `YOU DRIVE · ${Math.round(data.speed * 760)} mph`;
+  if (data.speed > 0.002 || Math.abs(data.driveLateralVelocity) > 0.05) {
+    const targetHeading = Math.atan2(data.dir * data.speed * 368, data.driveLateralVelocity);
+    const headingDelta = Math.atan2(
+      Math.sin(targetHeading - data.driveHeading),
+      Math.cos(targetHeading - data.driveHeading),
+    );
+    data.driveHeading += headingDelta * (1 - Math.exp(-delta * 7));
+  }
+
+  const actualLongitudinalSpeed = data.dir * data.speed * 368 + data.physicsXVelocity;
+  const actualLateralSpeed = data.driveLateralVelocity + data.physicsZVelocity;
+  const displaySpeed = Math.max(
+    0,
+    Math.round(Math.hypot(actualLongitudinalSpeed, actualLateralSpeed) * (760 / 368)),
+  );
+  statusEl.textContent = `YOU DRIVE · ${displaySpeed} mph${displaySpeed === 0 ? " · STOPPED" : ""}`;
 }
 
 function circularDistance(a, b) {
@@ -883,6 +935,8 @@ function enforceHardLaneClearance(lane) {
 function updateCollisionPhysics(delta) {
   state.cars.forEach((car) => {
     const data = car.userData;
+    data.progress = (data.progress + data.physicsXVelocity * delta / 368) % 1;
+    data.physicsXVelocity *= Math.exp(-delta * 2.2);
     data.physicsZ += data.physicsZVelocity * delta;
     data.physicsZVelocity += (-data.physicsZ * 8 - data.physicsZVelocity * 4.5) * delta;
     data.spin += data.spinVelocity * delta;
@@ -897,26 +951,54 @@ function updateCollisionPhysics(delta) {
     const dz = other.position.z - player.position.z;
     const xLimit = (player.userData.length + other.userData.length) * 0.5;
     const zLimit = 3.35;
-    if (Math.abs(dx) >= xLimit || Math.abs(dz) >= zLimit) return;
+    const scaledDistance = Math.hypot(dx / xLimit, dz / zLimit);
+    if (scaledDistance >= 1) return;
 
     const cooldown = state.drive.collisionCooldown.get(other) ?? 0;
     if (clock.elapsedTime < cooldown) return;
-    state.drive.collisionCooldown.set(other, clock.elapsedTime + 0.38);
+    state.drive.collisionCooldown.set(other, clock.elapsedTime + 0.14);
 
-    const side = Math.sign(dz) || (Math.random() < 0.5 ? -1 : 1);
-    const impact = THREE.MathUtils.clamp(
-      Math.abs(player.userData.speed - other.userData.speed) * 18 + 0.45,
-      0.45,
-      1.8,
+    const normal = new THREE.Vector2(dx / (xLimit * xLimit), dz / (zLimit * zLimit));
+    if (normal.lengthSq() < 0.0001) normal.set(player.userData.dir, 0.25);
+    normal.normalize();
+
+    const playerVelocity = new THREE.Vector2(
+      player.userData.dir * player.userData.speed * 368 + player.userData.physicsXVelocity,
+      player.userData.driveLateralVelocity + player.userData.physicsZVelocity,
     );
-    other.userData.physicsZVelocity += side * 7.5 * impact;
-    other.userData.spinVelocity += side * 4.2 * impact;
-    other.userData.speed *= 0.48;
-    other.userData.progress += Math.sign(dx || player.userData.dir) * (xLimit - Math.abs(dx) + 0.4) / 368;
+    const otherVelocity = new THREE.Vector2(
+      other.userData.dir * other.userData.speed * 368 + other.userData.physicsXVelocity,
+      other.userData.physicsZVelocity,
+    );
+    const relativeNormalSpeed = otherVelocity.clone().sub(playerVelocity).dot(normal);
+    const playerInverseMass = 1 / player.userData.mass;
+    const otherInverseMass = 1 / other.userData.mass;
+    const impulse = relativeNormalSpeed < 0
+      ? -(1 + 0.34) * relativeNormalSpeed / (playerInverseMass + otherInverseMass)
+      : 0;
 
-    player.userData.physicsZVelocity -= side * 2.8 * impact;
-    player.userData.spinVelocity -= side * 1.35 * impact;
-    player.userData.speed *= 0.62;
+    player.userData.physicsXVelocity -= impulse * playerInverseMass * normal.x;
+    player.userData.physicsZVelocity -= impulse * playerInverseMass * normal.y;
+    other.userData.physicsXVelocity += impulse * otherInverseMass * normal.x;
+    other.userData.physicsZVelocity += impulse * otherInverseMass * normal.y;
+
+    const hitSide = Math.sign(dz) || (Math.random() < 0.5 ? -1 : 1);
+    const spinImpulse = Math.min(impulse * 0.11, 6.5);
+    player.userData.spinVelocity -= hitSide * spinImpulse * playerInverseMass;
+    other.userData.spinVelocity += hitSide * spinImpulse * otherInverseMass;
+
+    const penetration = 1 - scaledDistance;
+    const totalInverseMass = playerInverseMass + otherInverseMass;
+    const separationX = normal.x * penetration * xLimit * 0.72;
+    const separationZ = normal.y * penetration * zLimit * 0.72;
+    player.userData.progress -= separationX * (playerInverseMass / totalInverseMass) / 368;
+    other.userData.progress += separationX * (otherInverseMass / totalInverseMass) / 368;
+    player.userData.physicsZ -= separationZ * (playerInverseMass / totalInverseMass);
+    other.userData.physicsZ += separationZ * (otherInverseMass / totalInverseMass);
+
+    const energyLoss = THREE.MathUtils.clamp(impulse / 65, 0, 0.42);
+    player.userData.speed *= 1 - energyLoss * 0.7;
+    other.userData.speed *= 1 - energyLoss;
   });
 }
 
@@ -1247,7 +1329,7 @@ function updateEnvironment(delta) {
   updateWeather(state.leaves, delta, 10, 8, 92, 7.5);
 }
 
-function updateCamera() {
+function updateCamera(delta) {
   if (state.pov === "normal") {
     controls.enabled = true;
     controls.update();
@@ -1262,7 +1344,7 @@ function updateCamera() {
       .clone()
       .add(new THREE.Vector3(0, 8.5, 0))
       .add(chaseForward.clone().multiplyScalar(-17));
-    camera.position.lerp(chasePosition, 0.14);
+    camera.position.lerp(chasePosition, 1 - Math.exp(-delta * 7.5));
     camera.lookAt(
       car.position
         .clone()
@@ -1373,7 +1455,7 @@ function animate() {
   updateTraffic(delta);
   updateEnvironment(delta);
   updateAudio(delta);
-  updateCamera();
+  updateCamera(delta);
   renderer.render(scene, camera);
   requestAnimationFrame(animate);
 }
