@@ -790,6 +790,21 @@ function isLaneGapClear(car, lane) {
   ));
 }
 
+function isAmbulanceMergeGapClear(car, lane, mergeSpeed) {
+  const roadLength = 368;
+  return lane.cars.every((other) => {
+    if (other === car) return true;
+    const combinedHalfLength = car.userData.length / 2 + other.userData.length / 2;
+    const distanceAhead = progressDistanceAhead(car, other) * roadLength;
+    const distanceBehind = progressDistanceAhead(other, car) * roadLength;
+    const frontClearance = combinedHalfLength + 12
+      + Math.max(0, mergeSpeed - other.userData.speed) * 90;
+    const rearClearance = combinedHalfLength + 16
+      + Math.max(0, other.userData.speed - mergeSpeed) * 140;
+    return distanceAhead > frontClearance && distanceBehind > rearClearance;
+  });
+}
+
 function requestAmbulanceMergeGap(car, targetLane) {
   targetLane.cars.forEach((other) => {
     if (other === car || other === state.driverCar) return;
@@ -1011,7 +1026,11 @@ function updateAmbulanceClearance() {
       requestAmbulanceMergeGap(car, targetLane);
     }
 
-    if (!carData.changingLane && targetMovesAway && isLaneGapClear(car, targetLane)) {
+    if (
+      !carData.changingLane
+      && targetMovesAway
+      && isAmbulanceMergeGapClear(car, targetLane, data.speed)
+    ) {
       startLaneChange(car, targetLane);
     }
   });
@@ -1023,9 +1042,8 @@ function enforceAmbulanceLaneFlow() {
   const ambulanceSpeed = state.driverCar.userData.speed;
   state.cars.forEach((car) => {
     if (car === state.driverCar || car.userData.lane !== protectedLaneId) return;
-    const linkedSpeed = Math.max(car.userData.speed, car.userData.baseSpeed, ambulanceSpeed);
-    car.userData.speed = linkedSpeed;
-    car.userData.targetSpeed = linkedSpeed;
+    car.userData.speed = ambulanceSpeed;
+    car.userData.targetSpeed = ambulanceSpeed;
   });
 }
 
