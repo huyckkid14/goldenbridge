@@ -82,6 +82,7 @@ const state = {
     collisionCooldown: new Map(),
     camera: "dash",
     ambulance: false,
+    signal: null,
   },
 };
 
@@ -620,6 +621,7 @@ function updateCarPosition(car, delta) {
 
 function setDriveMode(enabled) {
   const car = state.driverCar;
+  state.drive.signal = null;
   if (enabled) {
     state.lanes.forEach((lane) => {
       lane.cars = lane.cars.filter((item) => item !== car);
@@ -932,7 +934,12 @@ function updateTurnIndicators() {
   state.cars.forEach((car) => {
     const data = car.userData;
     data.signalLights.forEach(({ side, material }) => {
-      const isTurningSide = (data.changingLane || data.ambulanceYielding) && data.indicatorSide === side;
+      const driverSignal = car === state.driverCar && state.pov === "drive"
+        ? state.drive.signal
+        : null;
+      const playerSignalOn = driverSignal === "hazard" || driverSignal === side;
+      const isTurningSide = playerSignalOn
+        || ((data.changingLane || data.ambulanceYielding) && data.indicatorSide === side);
       if (isTurningSide && blinkOn) {
         material.color.setHex(0xffb000);
         material.emissive.setHex(0xff9c00);
@@ -1700,6 +1707,24 @@ function bindControls() {
 }
 
 function setDriveKey(event, pressed) {
+  const signalModes = {
+    KeyQ: "left",
+    KeyE: "right",
+    KeyZ: "hazard",
+  };
+  if (signalModes[event.code] && state.pov === "drive") {
+    event.preventDefault();
+    if (pressed && !event.repeat) {
+      const nextSignal = signalModes[event.code];
+      state.drive.signal = state.drive.signal === nextSignal ? null : nextSignal;
+      const signalLabel = state.drive.signal
+        ? `${state.drive.signal[0].toUpperCase()}${state.drive.signal.slice(1)}`
+        : "Off";
+      statusEl.textContent = `Turn signals: ${signalLabel}`;
+      playControlClick();
+    }
+    return;
+  }
   if (event.code === "KeyC" && pressed && !event.repeat && state.pov === "drive") {
     event.preventDefault();
     setDriveCamera(state.drive.camera === "dash" ? "normal" : "dash");
