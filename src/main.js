@@ -667,7 +667,12 @@ function setAmbulanceMode(enabled) {
     const protectedLaneId = getAmbulanceLaneId();
     state.cars.forEach((car) => {
       const carData = car.userData;
-      if (car === state.driverCar || !carData.changingLane || carData.targetLane !== protectedLaneId) return;
+      if (car === state.driverCar || !carData.changingLane) return;
+      const movingIntoAmbulanceLane = carData.targetLane === protectedLaneId;
+      const outsideLane = getOuterLane(carData.dir);
+      const opposingMoveTowardDivider = carData.dir !== data.dir
+        && carData.targetLane !== outsideLane.id;
+      if (!movingIntoAmbulanceLane && !opposingMoveTowardDivider) return;
       state.lanes[carData.targetLane].cars = state.lanes[carData.targetLane].cars
         .filter((item) => item !== car);
       carData.changingLane = false;
@@ -826,18 +831,35 @@ function getAmbulanceLaneId() {
   )).id;
 }
 
+function getOuterLane(dir) {
+  return state.lanes
+    .filter((lane) => lane.dir === dir)
+    .sort((a, b) => Math.abs(b.z) - Math.abs(a.z))[0];
+}
+
+function setAmbulanceYieldIndicator(carData, targetLane) {
+  const targetIsWorldRight = targetLane.z < carData.currentZ;
+  carData.ambulanceYielding = true;
+  carData.indicatorSide = carData.dir === 1
+    ? (targetIsWorldRight ? "right" : "left")
+    : (targetIsWorldRight ? "left" : "right");
+}
+
 function startLaneChange(car, targetLane) {
   const data = car.userData;
+  const ambulanceData = state.driverCar.userData;
   if (
     state.drive.ambulance
     && car !== state.driverCar
-    && targetLane.id === getAmbulanceLaneId()
+    && (
+      targetLane.id === getAmbulanceLaneId()
+      || (data.dir !== ambulanceData.dir && targetLane.id !== getOuterLane(data.dir).id)
+    )
   ) {
     data.cooldown = THREE.MathUtils.randFloat(0.8, 1.5);
     return false;
   }
   data.changingLane = true;
-  data.ambulanceYielding = false;
   data.changeT = 0;
   data.targetLane = targetLane.id;
   // Reserve the destination immediately. This makes every following gap check
@@ -1003,26 +1025,35 @@ function updateAmbulanceClearance() {
 
   state.cars.forEach((car) => {
     if (car === player) return;
+    const carData = car.userData;
+    const currentLane = state.lanes[carData.lane];
+    if (!currentLane) return;
+
+    if (carData.dir !== data.dir) {
+      const outsideLane = getOuterLane(carData.dir);
+      if (!carData.changingLane && currentLane.id !== outsideLane.id) {
+        setAmbulanceYieldIndicator(carData, outsideLane);
+        requestAmbulanceMergeGap(car, outsideLane);
+        if (isAmbulanceMergeGapClear(car, outsideLane, data.speed)) {
+          startLaneChange(car, outsideLane);
+        }
+      }
+      return;
+    }
+
     const dx = car.position.x - player.position.x;
     const dz = car.position.z - player.position.z;
     const ahead = dx * forwardX + dz * forwardZ;
     const lateral = Math.abs(dx * forwardZ - dz * forwardX);
     if (ahead <= 0 || ahead > 145 || lateral > 18) return;
 
-    const carData = car.userData;
-    const currentLane = state.lanes[carData.lane];
-    if (!currentLane || currentLane.id !== protectedLaneId) return;
-    const targetLane = currentLane?.neighbor;
-    const targetMovesAway = targetLane
-      && targetLane.id !== protectedLaneId
-      && Math.abs(targetLane.z - data.currentZ) > Math.abs(currentLane.z - data.currentZ);
+    if (currentLane.id !== protectedLaneId) return;
+    const outsideLane = getOuterLane(carData.dir);
+    const targetLane = outsideLane.id !== protectedLaneId ? outsideLane : currentLane.neighbor;
+    const targetMovesAway = targetLane && targetLane.id !== protectedLaneId;
 
     if (!carData.changingLane && targetMovesAway) {
-      const targetIsWorldRight = targetLane.z < carData.currentZ;
-      carData.ambulanceYielding = true;
-      carData.indicatorSide = carData.dir === 1
-        ? (targetIsWorldRight ? "right" : "left")
-        : (targetIsWorldRight ? "left" : "right");
+      setAmbulanceYieldIndicator(carData, targetLane);
       requestAmbulanceMergeGap(car, targetLane);
     }
 
@@ -1041,7 +1072,10 @@ function enforceAmbulanceLaneFlow() {
   const protectedLaneId = getAmbulanceLaneId();
   const ambulanceSpeed = state.driverCar.userData.speed;
   state.cars.forEach((car) => {
-    if (car === state.driverCar || car.userData.lane !== protectedLaneId) return;
+    if (
+      car === state.driverCar
+      || (car.userData.lane !== protectedLaneId && !car.userData.ambulanceYielding)
+    ) return;
     car.userData.speed = ambulanceSpeed;
     car.userData.targetSpeed = ambulanceSpeed;
   });
