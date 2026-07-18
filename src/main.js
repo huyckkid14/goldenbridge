@@ -937,7 +937,10 @@ function updateTurnIndicators() {
       const driverSignal = car === state.driverCar && state.pov === "drive"
         ? state.drive.signal
         : null;
-      const playerSignalOn = driverSignal === "hazard" || driverSignal === side;
+      const playerLampSide = driverSignal === "left"
+        ? "right"
+        : (driverSignal === "right" ? "left" : driverSignal);
+      const playerSignalOn = playerLampSide === "hazard" || playerLampSide === side;
       const isTurningSide = playerSignalOn
         || ((data.changingLane || data.ambulanceYielding) && data.indicatorSide === side);
       if (isTurningSide && blinkOn) {
