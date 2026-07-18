@@ -8,6 +8,7 @@ const cockpitEl = document.querySelector("#driverCockpit");
 const driveHelpEl = document.querySelector("#driveHelp");
 const driveCameraButton = document.querySelector("#driveCameraButton");
 const ambulanceButton = document.querySelector("#ambulanceButton");
+const soundButton = document.querySelector("#soundControls button");
 const steeringWheelEl = document.querySelector(".wheel");
 const fpsOverlay = document.querySelector("#fpsOverlay");
 
@@ -59,6 +60,8 @@ const state = {
     roadGain: null,
     wind: null,
     windGain: null,
+    siren: null,
+    sirenGain: null,
   },
   snow: null,
   leaves: null,
@@ -679,6 +682,11 @@ function setAmbulanceMode(enabled) {
   data.ambulanceRig.visible = enabled;
   ambulanceButton.textContent = enabled ? "Ambulance: ON" : "Ambulance: Off";
   ambulanceButton.classList.toggle("emergency-active", enabled);
+  if (enabled) {
+    setSoundEnabled(true);
+    soundButton.classList.add("active");
+    soundButton.textContent = "Sound On";
+  }
 }
 
 function updatePlayerDriving(delta) {
@@ -947,6 +955,7 @@ function updateAmbulanceClearance() {
   const data = player.userData;
   const forwardX = Math.sin(data.driveHeading);
   const forwardZ = Math.cos(data.driveHeading);
+  const protectedLaneId = getAmbulanceLaneId();
 
   state.cars.forEach((car) => {
     if (car === player) return;
@@ -958,8 +967,8 @@ function updateAmbulanceClearance() {
 
     const carData = car.userData;
     const currentLane = state.lanes[carData.lane];
+    if (!currentLane || currentLane.id !== protectedLaneId) return;
     const targetLane = currentLane?.neighbor;
-    const protectedLaneId = getAmbulanceLaneId();
     const targetMovesAway = targetLane
       && targetLane.id !== protectedLaneId
       && Math.abs(targetLane.z - data.currentZ) > Math.abs(currentLane.z - data.currentZ);
@@ -968,9 +977,9 @@ function updateAmbulanceClearance() {
       startLaneChange(car, targetLane);
       carData.targetSpeed = Math.min(carData.targetSpeed, carData.baseSpeed * 0.9);
     } else {
-      const brakingDistance = THREE.MathUtils.clamp(ahead / 110, 0, 1);
-      carData.targetSpeed = Math.min(carData.targetSpeed, carData.baseSpeed * brakingDistance * 0.55);
-      if (ahead < 38) carData.targetSpeed = 0;
+      const distanceBlend = THREE.MathUtils.clamp(ahead / 110, 0, 1);
+      const rollingYieldSpeed = carData.baseSpeed * THREE.MathUtils.lerp(0.38, 0.72, distanceBlend);
+      carData.targetSpeed = Math.min(carData.targetSpeed, rollingYieldSpeed);
     }
   });
 }
@@ -1402,9 +1411,17 @@ function initAudio() {
   windGain.gain.value = 0.018;
   wind.connect(windFilter).connect(windGain).connect(master);
 
+  const siren = context.createOscillator();
+  const sirenGain = context.createGain();
+  siren.type = "triangle";
+  siren.frequency.value = 760;
+  sirenGain.gain.value = 0;
+  siren.connect(sirenGain).connect(master);
+
   engine.start();
   roadNoise.start();
   wind.start();
+  siren.start();
 
   state.audio.context = context;
   state.audio.master = master;
@@ -1414,6 +1431,8 @@ function initAudio() {
   state.audio.roadGain = roadGain;
   state.audio.wind = wind;
   state.audio.windGain = windGain;
+  state.audio.siren = siren;
+  state.audio.sirenGain = sirenGain;
 }
 
 function setSoundEnabled(enabled) {
@@ -1457,6 +1476,9 @@ function updateAudio(delta) {
   state.audio.engineGain.gain.setTargetAtTime(inCar ? 0.18 : 0.09, now, 0.12);
   state.audio.roadGain.gain.setTargetAtTime(inCar ? 0.08 : 0.035, now, 0.12);
   state.audio.windGain.gain.setTargetAtTime(inCar ? 0.03 : 0.016, now, 0.12);
+  const sirenWave = (Math.sin(clock.elapsedTime * 3.8) + 1) * 0.5;
+  state.audio.siren.frequency.setTargetAtTime(650 + sirenWave * 430, now, 0.035);
+  state.audio.sirenGain.gain.setTargetAtTime(state.drive.ambulance ? 0.2 : 0, now, 0.04);
 }
 
 function updateEnvironment(delta) {
