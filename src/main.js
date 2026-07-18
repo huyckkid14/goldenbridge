@@ -1023,7 +1023,9 @@ function enforceAmbulanceLaneFlow() {
   const ambulanceSpeed = state.driverCar.userData.speed;
   state.cars.forEach((car) => {
     if (car === state.driverCar || car.userData.lane !== protectedLaneId) return;
-    car.userData.targetSpeed = Math.max(car.userData.baseSpeed, ambulanceSpeed);
+    const linkedSpeed = Math.max(car.userData.speed, car.userData.baseSpeed, ambulanceSpeed);
+    car.userData.speed = linkedSpeed;
+    car.userData.targetSpeed = linkedSpeed;
   });
 }
 
