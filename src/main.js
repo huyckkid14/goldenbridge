@@ -660,6 +660,21 @@ function setDriveMode(enabled) {
 function setAmbulanceMode(enabled) {
   const data = state.driverCar.userData;
   state.drive.ambulance = enabled;
+  if (enabled) {
+    const protectedLaneId = getAmbulanceLaneId();
+    state.cars.forEach((car) => {
+      const carData = car.userData;
+      if (car === state.driverCar || !carData.changingLane || carData.targetLane !== protectedLaneId) return;
+      state.lanes[carData.targetLane].cars = state.lanes[carData.targetLane].cars
+        .filter((item) => item !== car);
+      carData.changingLane = false;
+      carData.targetLane = null;
+      carData.currentZ = carData.z;
+      carData.targetZ = carData.z;
+      carData.indicatorSide = null;
+      carData.cooldown = THREE.MathUtils.randFloat(1.2, 2.2);
+    });
+  }
   data.bodyMaterial.color.setHex(enabled ? 0xffffff : data.originalBodyColor);
   data.ambulanceRig.visible = enabled;
   ambulanceButton.textContent = enabled ? "Ambulance: ON" : "Ambulance: Off";
@@ -708,13 +723,13 @@ function updatePlayerDriving(delta) {
     if (data.speed < 0.0015) data.speed = 0;
   }
 
-  const roadWheelAngle = (data.steeringWheelAngle / steeringWheelLock) * THREE.MathUtils.degToRad(34);
+  const roadWheelAngle = (data.steeringWheelAngle / steeringWheelLock) * THREE.MathUtils.degToRad(22);
   const speedUnits = data.speed * 368;
   const wheelbase = 4.4;
   const yawRate = THREE.MathUtils.clamp(
     speedUnits / wheelbase * Math.tan(roadWheelAngle),
-    -1.35,
-    1.35,
+    -0.72,
+    0.72,
   );
   data.driveHeading -= yawRate * delta;
 
@@ -761,8 +776,23 @@ function isLaneGapClear(car, lane) {
   ));
 }
 
+function getAmbulanceLaneId() {
+  const ambulanceZ = state.driverCar.userData.currentZ;
+  return state.lanes.reduce((nearest, lane) => (
+    Math.abs(lane.z - ambulanceZ) < Math.abs(nearest.z - ambulanceZ) ? lane : nearest
+  )).id;
+}
+
 function startLaneChange(car, targetLane) {
   const data = car.userData;
+  if (
+    state.drive.ambulance
+    && car !== state.driverCar
+    && targetLane.id === getAmbulanceLaneId()
+  ) {
+    data.cooldown = THREE.MathUtils.randFloat(0.8, 1.5);
+    return false;
+  }
   data.changingLane = true;
   data.changeT = 0;
   data.targetLane = targetLane.id;
@@ -777,6 +807,7 @@ function startLaneChange(car, targetLane) {
   data.indicatorSide = data.dir === 1
     ? (targetIsWorldRight ? "right" : "left")
     : (targetIsWorldRight ? "left" : "right");
+  return true;
 }
 
 function finishLaneChange(car) {
@@ -883,7 +914,10 @@ function updateDriverAvoidance() {
   const player = state.driverCar;
   const playerData = player.userData;
 
-  if (state.drive.ambulance) updateAmbulanceClearance();
+  if (state.drive.ambulance) {
+    updateAmbulanceClearance();
+    return;
+  }
 
   state.cars.forEach((car) => {
     if (car === player) return;
@@ -925,7 +959,9 @@ function updateAmbulanceClearance() {
     const carData = car.userData;
     const currentLane = state.lanes[carData.lane];
     const targetLane = currentLane?.neighbor;
+    const protectedLaneId = getAmbulanceLaneId();
     const targetMovesAway = targetLane
+      && targetLane.id !== protectedLaneId
       && Math.abs(targetLane.z - data.currentZ) > Math.abs(currentLane.z - data.currentZ);
 
     if (!carData.changingLane && targetMovesAway && isLaneGapClear(car, targetLane)) {
