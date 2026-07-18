@@ -83,6 +83,10 @@ const state = {
     camera: "dash",
     ambulance: false,
     signal: null,
+    cruise: {
+      active: false,
+      speed: 0,
+    },
   },
 };
 
@@ -622,6 +626,8 @@ function updateCarPosition(car, delta) {
 function setDriveMode(enabled) {
   const car = state.driverCar;
   state.drive.signal = null;
+  state.drive.cruise.active = false;
+  state.drive.cruise.speed = 0;
   if (enabled) {
     state.lanes.forEach((lane) => {
       lane.cars = lane.cars.filter((item) => item !== car);
@@ -712,7 +718,10 @@ function updatePlayerDriving(delta) {
   const targetSteer = Number(keys.has("KeyD") || keys.has("ArrowRight"))
     - Number(keys.has("KeyA") || keys.has("ArrowLeft"));
 
-  const throttleTarget = accelerating && !braking ? 1 : 0;
+  if (braking && state.drive.cruise.active) {
+    state.drive.cruise.active = false;
+  }
+  const throttleTarget = (accelerating || state.drive.cruise.active) && !braking ? 1 : 0;
   data.driveThrottle = THREE.MathUtils.lerp(
     data.driveThrottle,
     throttleTarget,
@@ -739,6 +748,8 @@ function updatePlayerDriving(delta) {
   } else if (accelerating) {
     const acceleration = 0.025 + data.driveThrottle * 0.035;
     data.speed = Math.min(data.speed + delta * acceleration, 0.105);
+  } else if (state.drive.cruise.active) {
+    data.speed = state.drive.cruise.speed;
   } else {
     data.speed = Math.max(data.speed - delta * 0.009, 0);
     if (data.speed < 0.0015) data.speed = 0;
@@ -769,7 +780,10 @@ function updatePlayerDriving(delta) {
     0,
     Math.round(Math.hypot(actualLongitudinalSpeed, actualLateralSpeed) * (760 / 368)),
   );
-  statusEl.textContent = `YOU DRIVE · ${displaySpeed} mph${displaySpeed === 0 ? " · STOPPED" : ""}`;
+  const cruiseStatus = state.drive.cruise.active
+    ? ` · CRUISE ${Math.round(state.drive.cruise.speed * 760)} mph`
+    : "";
+  statusEl.textContent = `YOU DRIVE · ${displaySpeed} mph${displaySpeed === 0 ? " · STOPPED" : ""}${cruiseStatus}`;
 }
 
 function circularDistance(a, b) {
@@ -1728,14 +1742,25 @@ function setDriveKey(event, pressed) {
     }
     return;
   }
-  if (event.code === "KeyC" && pressed && !event.repeat && state.pov === "drive") {
+  if (event.code === "KeyC" && state.pov === "drive") {
     event.preventDefault();
-    setDriveCamera(state.drive.camera === "dash" ? "normal" : "dash");
+    if (pressed && !event.repeat) {
+      state.drive.cruise.active = !state.drive.cruise.active;
+      state.drive.cruise.speed = state.driverCar.userData.speed;
+      statusEl.textContent = state.drive.cruise.active
+        ? `Cruise control: ${Math.round(state.drive.cruise.speed * 760)} mph`
+        : "Cruise control: Off";
+      playControlClick();
+    }
     return;
   }
   const driveKeys = ["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowLeft", "ArrowDown", "ArrowRight"];
   if (!driveKeys.includes(event.code)) return;
   if (state.pov === "drive") event.preventDefault();
+  if (pressed && (event.code === "KeyS" || event.code === "ArrowDown") && state.drive.cruise.active) {
+    state.drive.cruise.active = false;
+    statusEl.textContent = "Cruise control: Cancelled by brake";
+  }
   if (pressed) state.drive.keys.add(event.code);
   else state.drive.keys.delete(event.code);
 }
