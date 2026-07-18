@@ -677,6 +677,12 @@ function setAmbulanceMode(enabled) {
       carData.indicatorSide = null;
       carData.cooldown = THREE.MathUtils.randFloat(1.2, 2.2);
     });
+  } else {
+    state.cars.forEach((car) => {
+      const carData = car.userData;
+      carData.ambulanceYielding = false;
+      if (!carData.changingLane) carData.indicatorSide = null;
+    });
   }
   data.bodyMaterial.color.setHex(enabled ? 0xffffff : data.originalBodyColor);
   data.ambulanceRig.visible = enabled;
@@ -791,7 +797,9 @@ function requestAmbulanceMergeGap(car, targetLane) {
     if (distanceBehind > 0.12) return;
 
     const urgency = THREE.MathUtils.clamp(1 - distanceBehind / 0.12, 0, 1);
-    const cooperativeSpeed = other.userData.baseSpeed * THREE.MathUtils.lerp(0.82, 0.42, urgency);
+    const cooperativeSpeed = urgency > 0.9
+      ? 0
+      : other.userData.baseSpeed * THREE.MathUtils.lerp(0.82, 0.18, urgency);
     other.userData.targetSpeed = Math.min(other.userData.targetSpeed, cooperativeSpeed);
   });
 }
@@ -814,6 +822,7 @@ function startLaneChange(car, targetLane) {
     return false;
   }
   data.changingLane = true;
+  data.ambulanceYielding = false;
   data.changeT = 0;
   data.targetLane = targetLane.id;
   // Reserve the destination immediately. This makes every following gap check
@@ -886,7 +895,7 @@ function updateTurnIndicators() {
   state.cars.forEach((car) => {
     const data = car.userData;
     data.signalLights.forEach(({ side, material }) => {
-      const isTurningSide = data.changingLane && data.indicatorSide === side;
+      const isTurningSide = (data.changingLane || data.ambulanceYielding) && data.indicatorSide === side;
       if (isTurningSide && blinkOn) {
         material.color.setHex(0xffb000);
         material.emissive.setHex(0xff9c00);
@@ -970,6 +979,14 @@ function updateAmbulanceClearance() {
   const protectedLaneId = getAmbulanceLaneId();
 
   state.cars.forEach((car) => {
+    const carData = car.userData;
+    if (car !== player && !carData.changingLane) {
+      carData.ambulanceYielding = false;
+      carData.indicatorSide = null;
+    }
+  });
+
+  state.cars.forEach((car) => {
     if (car === player) return;
     const dx = car.position.x - player.position.x;
     const dz = car.position.z - player.position.z;
@@ -986,17 +1003,27 @@ function updateAmbulanceClearance() {
       && Math.abs(targetLane.z - data.currentZ) > Math.abs(currentLane.z - data.currentZ);
 
     if (!carData.changingLane && targetMovesAway) {
+      const targetIsWorldRight = targetLane.z < carData.currentZ;
+      carData.ambulanceYielding = true;
+      carData.indicatorSide = carData.dir === 1
+        ? (targetIsWorldRight ? "right" : "left")
+        : (targetIsWorldRight ? "left" : "right");
       requestAmbulanceMergeGap(car, targetLane);
     }
 
     if (!carData.changingLane && targetMovesAway && isLaneGapClear(car, targetLane)) {
       startLaneChange(car, targetLane);
-      carData.targetSpeed = Math.min(carData.targetSpeed, carData.baseSpeed * 0.9);
-    } else {
-      const distanceBlend = THREE.MathUtils.clamp(ahead / 110, 0, 1);
-      const rollingYieldSpeed = carData.baseSpeed * THREE.MathUtils.lerp(0.38, 0.72, distanceBlend);
-      carData.targetSpeed = Math.min(carData.targetSpeed, rollingYieldSpeed);
     }
+  });
+}
+
+function enforceAmbulanceLaneFlow() {
+  if (!state.drive.ambulance) return;
+  const protectedLaneId = getAmbulanceLaneId();
+  const ambulanceSpeed = state.driverCar.userData.speed;
+  state.cars.forEach((car) => {
+    if (car === state.driverCar || car.userData.lane !== protectedLaneId) return;
+    car.userData.targetSpeed = Math.max(car.userData.baseSpeed, ambulanceSpeed);
   });
 }
 
@@ -1350,6 +1377,7 @@ function updateTraffic(delta) {
   updateYieldingSpeeds();
   state.lanes.forEach(enforceLaneSpacing);
   enforceTrafficClearance();
+  enforceAmbulanceLaneFlow();
   easeTrafficSpeeds(delta);
   state.cars.forEach((car) => {
     if (car === state.driverCar && state.pov === "drive") return;
