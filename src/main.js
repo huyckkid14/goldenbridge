@@ -7,6 +7,7 @@ const hintEl = document.querySelector("#hint");
 const cockpitEl = document.querySelector("#driverCockpit");
 const driveHelpEl = document.querySelector("#driveHelp");
 const driveCameraButton = document.querySelector("#driveCameraButton");
+const steeringWheelEl = document.querySelector(".wheel");
 const fpsOverlay = document.querySelector("#fpsOverlay");
 
 const scene = new THREE.Scene();
@@ -444,6 +445,7 @@ function createTraffic() {
         spin: 0,
         spinVelocity: 0,
         driveSteer: 0,
+        steeringWheelAngle: 0,
         driveThrottle: 0,
         driveLateralVelocity: 0,
         driveHeading: null,
@@ -584,12 +586,14 @@ function setDriveMode(enabled) {
     car.userData.currentZ = car.position.z;
     car.userData.speed = Math.max(car.userData.speed, 0.035);
     car.userData.driveSteer = 0;
+    car.userData.steeringWheelAngle = 0;
     car.userData.driveThrottle = 0;
     car.userData.driveHeading = car.rotation.y;
     return;
   }
 
   const data = car.userData;
+  data.dir = Math.sin(data.driveHeading) >= 0 ? 1 : -1;
   const nearestLane = state.lanes
     .filter((lane) => lane.dir === data.dir)
     .sort((a, b) => Math.abs(a.z - data.currentZ) - Math.abs(b.z - data.currentZ))[0];
@@ -604,9 +608,11 @@ function setDriveMode(enabled) {
   data.spin = 0;
   data.spinVelocity = 0;
   data.driveSteer = 0;
+  data.steeringWheelAngle = 0;
   data.driveThrottle = 0;
   data.driveLateralVelocity = 0;
   data.driveHeading = null;
+  steeringWheelEl.style.transform = "";
   if (!nearestLane.cars.includes(car)) nearestLane.cars.push(car);
 }
 
@@ -632,6 +638,15 @@ function updatePlayerDriving(delta) {
     1 - Math.exp(-delta * (targetSteer === 0 ? 8.5 : 5.5)),
   );
 
+  const steeringWheelLock = Math.PI * 2.5;
+  const wheelTarget = targetSteer * steeringWheelLock;
+  data.steeringWheelAngle = THREE.MathUtils.lerp(
+    data.steeringWheelAngle,
+    wheelTarget,
+    1 - Math.exp(-delta * (targetSteer === 0 ? 5.8 : 3.6)),
+  );
+  steeringWheelEl.style.transform = `translateX(-50%) rotateX(18deg) rotateZ(${data.steeringWheelAngle}rad)`;
+
   if (braking) {
     data.speed = Math.max(data.speed - delta * 0.13, 0);
     data.physicsXVelocity *= Math.exp(-delta * 5.5);
@@ -643,26 +658,26 @@ function updatePlayerDriving(delta) {
     if (data.speed < 0.0015) data.speed = 0;
   }
 
-  data.progress = (data.progress + delta * data.speed * data.dir) % 1;
-  const speedBlend = THREE.MathUtils.clamp(data.speed / 0.075, 0, 1);
-  const steeringAuthority = THREE.MathUtils.lerp(0, 10.2, speedBlend);
-  data.driveLateralVelocity = data.driveSteer * data.dir * steeringAuthority;
+  const roadWheelAngle = (data.steeringWheelAngle / steeringWheelLock) * THREE.MathUtils.degToRad(34);
+  const speedUnits = data.speed * 368;
+  const wheelbase = 4.4;
+  const yawRate = THREE.MathUtils.clamp(
+    speedUnits / wheelbase * Math.tan(roadWheelAngle),
+    -1.35,
+    1.35,
+  );
+  data.driveHeading -= yawRate * delta;
+
+  const driveXVelocity = Math.sin(data.driveHeading) * speedUnits;
+  data.driveLateralVelocity = Math.cos(data.driveHeading) * speedUnits;
+  data.progress = (data.progress + driveXVelocity * delta / 368) % 1;
   data.currentZ = THREE.MathUtils.clamp(
     data.currentZ + data.driveLateralVelocity * delta,
     -14.2,
     14.2,
   );
 
-  if (data.speed > 0.002 || Math.abs(data.driveLateralVelocity) > 0.05) {
-    const targetHeading = Math.atan2(data.dir * data.speed * 368, data.driveLateralVelocity);
-    const headingDelta = Math.atan2(
-      Math.sin(targetHeading - data.driveHeading),
-      Math.cos(targetHeading - data.driveHeading),
-    );
-    data.driveHeading += headingDelta * (1 - Math.exp(-delta * 7));
-  }
-
-  const actualLongitudinalSpeed = data.dir * data.speed * 368 + data.physicsXVelocity;
+  const actualLongitudinalSpeed = driveXVelocity + data.physicsXVelocity;
   const actualLateralSpeed = data.driveLateralVelocity + data.physicsZVelocity;
   const displaySpeed = Math.max(
     0,
@@ -963,7 +978,8 @@ function updateCollisionPhysics(delta) {
     normal.normalize();
 
     const playerVelocity = new THREE.Vector2(
-      player.userData.dir * player.userData.speed * 368 + player.userData.physicsXVelocity,
+      Math.sin(player.userData.driveHeading) * player.userData.speed * 368
+        + player.userData.physicsXVelocity,
       player.userData.driveLateralVelocity + player.userData.physicsZVelocity,
     );
     const otherVelocity = new THREE.Vector2(
