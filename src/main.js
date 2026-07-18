@@ -1754,6 +1754,14 @@ function setDriveKey(event, pressed) {
     }
     return;
   }
+  if (event.code === "ArrowUp" && state.pov === "drive" && state.drive.cruise.active) {
+    event.preventDefault();
+    if (pressed) {
+      state.drive.cruise.speed = Math.min(state.drive.cruise.speed + 1 / 760, 0.105);
+      statusEl.textContent = `Cruise control: ${Math.round(state.drive.cruise.speed * 760)} mph`;
+    }
+    return;
+  }
   const driveKeys = ["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowLeft", "ArrowDown", "ArrowRight"];
   if (!driveKeys.includes(event.code)) return;
   if (state.pov === "drive") event.preventDefault();
