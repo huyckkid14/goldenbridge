@@ -421,10 +421,10 @@ function createBridgeLights(parent, deckY) {
 function createTraffic() {
   const colors = [0xc73b2a, 0x1c78c0, 0xf0c84b, 0xf5f1e8, 0x111315, 0x2e9b63];
   const laneData = [
-    { z: -11, dir: -1, offset: 0, speed: 0.045 },
-    { z: -4.5, dir: -1, offset: 0.5, speed: 0.038 },
-    { z: 4.5, dir: 1, offset: 0.08, speed: 0.041 },
-    { z: 11, dir: 1, offset: 0.58, speed: 0.047 },
+    { z: -11, dir: -1, offset: 0, speed: 0.058 },
+    { z: -4.5, dir: -1, offset: 0.5, speed: 0.05 },
+    { z: 4.5, dir: 1, offset: 0.08, speed: 0.054 },
+    { z: 11, dir: 1, offset: 0.58, speed: 0.061 },
   ];
 
   laneData.forEach((lane, laneIndex) => {
