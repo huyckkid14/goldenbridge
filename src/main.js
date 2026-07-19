@@ -449,6 +449,7 @@ function createTraffic() {
         targetLane: null,
         targetZ: lane.z,
         signalLights: car.userData.signalLights,
+        frontSignalLights: car.userData.frontSignalLights,
         brakeLights: car.userData.brakeLights,
         bodyMaterial: car.userData.bodyMaterial,
         originalBodyColor: car.userData.originalBodyColor,
@@ -502,6 +503,7 @@ function createTraffic() {
 function createCar(color, truck = false) {
   const group = new THREE.Group();
   group.userData.signalLights = [];
+  group.userData.frontSignalLights = [];
   group.userData.brakeLights = [];
   const bodyMat = new THREE.MeshStandardMaterial({
     color,
@@ -600,6 +602,20 @@ function createCar(color, truck = false) {
   };
   group.add(makeMesh(new THREE.BoxGeometry(0.75, 0.42, 0.22), headlightMat, new THREE.Vector3(-0.9, 1.05, length / 2 + 0.04)));
   group.add(makeMesh(new THREE.BoxGeometry(0.75, 0.42, 0.22), headlightMat, new THREE.Vector3(0.9, 1.05, length / 2 + 0.04)));
+  ["left", "right"].forEach((side) => {
+    const material = new THREE.MeshBasicMaterial({
+      color: 0x4d2100,
+      toneMapped: false,
+    });
+    group.userData.frontSignalLights.push({ side, material });
+    group.add(makeMesh(
+      new THREE.BoxGeometry(0.34, 0.42, 0.24),
+      material,
+      new THREE.Vector3(side === "left" ? -1.38 : 1.38, 1.04, length / 2 + 0.06),
+      false,
+      false,
+    ));
+  });
   group.add(makeTailLight("left"));
   group.add(makeTailLight("right"));
   [-0.34, 0.34].forEach((x) => {
@@ -1085,16 +1101,19 @@ function updateTurnIndicators() {
   const blinkOn = Math.sin(clock.elapsedTime * 10) > 0;
   state.cars.forEach((car) => {
     const data = car.userData;
+    const driverSignal = car === state.driverCar && state.pov === "drive"
+      ? state.drive.signal
+      : null;
+    const playerLampSide = driverSignal === "left"
+      ? "right"
+      : (driverSignal === "right" ? "left" : driverSignal);
+    const signalIsOn = (side) => (
+      playerLampSide === "hazard"
+      || playerLampSide === side
+      || ((data.changingLane || data.ambulanceYielding) && data.indicatorSide === side)
+    );
     data.signalLights.forEach(({ side, material }) => {
-      const driverSignal = car === state.driverCar && state.pov === "drive"
-        ? state.drive.signal
-        : null;
-      const playerLampSide = driverSignal === "left"
-        ? "right"
-        : (driverSignal === "right" ? "left" : driverSignal);
-      const playerSignalOn = playerLampSide === "hazard" || playerLampSide === side;
-      const isTurningSide = playerSignalOn
-        || ((data.changingLane || data.ambulanceYielding) && data.indicatorSide === side);
+      const isTurningSide = signalIsOn(side);
       if (isTurningSide && blinkOn) {
         material.color.setHex(0xff0000);
         material.emissive.setHex(0xff0000);
@@ -1104,6 +1123,9 @@ function updateTurnIndicators() {
         material.emissive.setHex(0xff0000);
         material.emissiveIntensity = 0.35;
       }
+    });
+    data.frontSignalLights.forEach(({ side, material }) => {
+      material.color.setHex(signalIsOn(side) && blinkOn ? 0xff9800 : 0x4d2100);
     });
   });
 }
