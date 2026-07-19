@@ -464,6 +464,7 @@ function createTraffic() {
         driveThrottle: 0,
         driveLateralVelocity: 0,
         driveHeading: null,
+        braking: false,
       };
       updateCarPosition(car, 0);
       state.cars.push(car);
@@ -756,6 +757,7 @@ function updatePlayerDriving(delta) {
   const braking = keys.has("KeyS") || keys.has("ArrowDown");
   const targetSteer = Number(keys.has("KeyD") || keys.has("ArrowRight"))
     - Number(keys.has("KeyA") || keys.has("ArrowLeft"));
+  data.braking = braking;
 
   if (braking && state.drive.cruise.active) {
     state.drive.cruise.active = false;
@@ -791,6 +793,7 @@ function updatePlayerDriving(delta) {
   } else if (state.drive.cruise.active) {
     if (state.drive.cruise.adaptive) {
       const targetSpeed = getAdaptiveCruiseTargetSpeed(state.driverCar, state.drive.cruise.speed);
+      data.braking = targetSpeed < data.speed - 0.0005;
       const response = targetSpeed < data.speed ? 0.1 : 0.035;
       data.speed += THREE.MathUtils.clamp(
         targetSpeed - data.speed,
@@ -1017,6 +1020,10 @@ function updateTurnIndicators() {
         material.color.setHex(0xffb000);
         material.emissive.setHex(0xff9c00);
         material.emissiveIntensity = 1.6;
+      } else if (data.braking) {
+        material.color.setHex(0xff180f);
+        material.emissive.setHex(0xff0804);
+        material.emissiveIntensity = 3.2;
       } else {
         material.color.setHex(0xff2f26);
         material.emissive.setHex(0xff1a12);
@@ -1173,6 +1180,7 @@ function easeTrafficSpeeds(delta) {
   state.cars.forEach((car) => {
     if (car === state.driverCar && state.pov === "drive") return;
     const data = car.userData;
+    data.braking = data.targetSpeed < data.speed - 0.0005;
     const easing = data.targetSpeed < data.speed ? 0.7 : 1.15;
     data.speed = THREE.MathUtils.lerp(data.speed, data.targetSpeed, Math.min(delta * easing, 1));
   });
