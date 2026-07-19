@@ -429,9 +429,9 @@ function createTraffic() {
 
   laneData.forEach((lane, laneIndex) => {
     const laneCars = [];
-    for (let i = 0; i < 9; i += 1) {
+    for (let i = 0; i < 7; i += 1) {
       const car = createCar(colors[(i + laneIndex) % colors.length], i % 5 === 0);
-      const progress = (i / 9 + lane.offset) % 1;
+      const progress = (i / 7 + lane.offset) % 1;
       car.userData = {
         lane: laneIndex,
         progress,
@@ -476,7 +476,7 @@ function createTraffic() {
       dir: lane.dir,
       z: lane.z,
       speed: lane.speed,
-      minGap: 1 / laneCars.length - 0.03,
+      minGap: 1 / laneCars.length - 0.025,
     });
   });
 
@@ -631,11 +631,6 @@ function setDriveMode(enabled) {
   state.drive.cruise.adaptive = false;
   state.drive.cruise.speed = 0;
   if (enabled) {
-    state.cars.forEach((trafficCar) => {
-      if (trafficCar !== car && trafficCar.userData.changingLane) {
-        cancelLaneChange(trafficCar);
-      }
-    });
     state.lanes.forEach((lane) => {
       lane.cars = lane.cars.filter((item) => item !== car);
     });
@@ -860,9 +855,15 @@ function minimumProgressGap(car, other, buffer = 3) {
 }
 
 function isLaneGapClear(car, lane) {
+  if (state.pov === "drive" && car !== state.driverCar) {
+    const playerData = state.driverCar.userData;
+    const playerNearTargetLane = Math.abs(playerData.currentZ - lane.z) < 5.5;
+    const distanceToPlayer = circularDistance(car.userData.progress, playerData.progress) * 368;
+    if (playerNearTargetLane && distanceToPlayer < 55) return false;
+  }
   return lane.cars.every((other) => (
     other === car
-    || circularDistance(car.userData.progress, other.userData.progress) > minimumProgressGap(car, other, 5)
+    || circularDistance(car.userData.progress, other.userData.progress) > minimumProgressGap(car, other, 10)
   ));
 }
 
@@ -920,14 +921,6 @@ function startLaneChange(car, targetLane) {
   const data = car.userData;
   const ambulanceData = state.driverCar.userData;
   if (
-    state.pov === "drive"
-    && car !== state.driverCar
-    && !(state.drive.ambulance && data.ambulanceYielding)
-  ) {
-    data.cooldown = THREE.MathUtils.randFloat(0.8, 1.5);
-    return false;
-  }
-  if (
     state.drive.ambulance
     && car !== state.driverCar
     && (
@@ -955,21 +948,6 @@ function startLaneChange(car, targetLane) {
   return true;
 }
 
-function cancelLaneChange(car) {
-  const data = car.userData;
-  if (data.targetLane !== null) {
-    state.lanes[data.targetLane].cars = state.lanes[data.targetLane].cars
-      .filter((item) => item !== car);
-  }
-  data.changingLane = false;
-  data.targetLane = null;
-  data.targetZ = data.z;
-  data.currentZ = data.z;
-  data.indicatorSide = null;
-  data.ambulanceYielding = false;
-  data.cooldown = THREE.MathUtils.randFloat(0.8, 1.5);
-}
-
 function finishLaneChange(car) {
   const data = car.userData;
   const sourceLane = state.lanes[data.lane];
@@ -991,7 +969,6 @@ function finishLaneChange(car) {
 function updateLaneChangeIntent(car, delta) {
   const data = car.userData;
   if (car === state.driverCar && state.pov === "drive") return;
-  if (state.pov === "drive" && !(state.drive.ambulance && data.ambulanceYielding)) return;
   if (data.changingLane) return;
 
   data.cooldown -= delta;
@@ -1009,14 +986,6 @@ function updateLaneChangeIntent(car, delta) {
 function updateLaneChangeMotion(car, delta) {
   const data = car.userData;
   if (car === state.driverCar && state.pov === "drive") return;
-  if (
-    state.pov === "drive"
-    && data.changingLane
-    && !(state.drive.ambulance && data.ambulanceYielding)
-  ) {
-    cancelLaneChange(car);
-    return;
-  }
   if (!data.changingLane) {
     data.currentZ = data.z;
     return;
@@ -1105,8 +1074,7 @@ function updateDriverAvoidance() {
 
     const urgency = THREE.MathUtils.clamp(1 - longitudinal / 72, 0, 1);
     const targetLane = state.lanes[data.lane]?.neighbor;
-    const canEvade = state.drive.ambulance
-      && targetLane
+    const canEvade = targetLane
       && !data.changingLane
       && Math.abs(targetLane.z - playerData.currentZ) > 5.5
       && isLaneGapClear(car, targetLane);
