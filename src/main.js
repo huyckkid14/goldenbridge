@@ -83,6 +83,7 @@ const state = {
     camera: "dash",
     ambulance: false,
     signal: null,
+    acceleratorDeadline: 0,
     cruise: {
       active: false,
       adaptive: false,
@@ -601,10 +602,9 @@ function createCar(color, truck = false) {
   group.add(makeTailLight("left"));
   group.add(makeTailLight("right"));
   [-0.34, 0.34].forEach((x) => {
-    const brakeMaterial = new THREE.MeshStandardMaterial({
+    const brakeMaterial = new THREE.MeshBasicMaterial({
       color: 0x660000,
-      emissive: 0x330000,
-      emissiveIntensity: 0.25,
+      toneMapped: false,
     });
     group.userData.brakeLights.push(brakeMaterial);
     group.add(makeMesh(
@@ -771,6 +771,15 @@ function updatePlayerDriving(delta) {
 
   const data = state.driverCar.userData;
   const keys = state.drive.keys;
+  if (
+    state.drive.acceleratorDeadline > 0
+    && performance.now() > state.drive.acceleratorDeadline
+  ) {
+    keys.delete("KeyW");
+    keys.delete("ArrowUp");
+    state.drive.acceleratorDeadline = 0;
+    data.driveThrottle = 0;
+  }
   const accelerating = keys.has("KeyW") || keys.has("ArrowUp");
   const braking = keys.has("KeyS") || keys.has("ArrowDown");
   const targetSteer = Number(keys.has("KeyD") || keys.has("ArrowRight"))
@@ -1054,8 +1063,6 @@ function updateBrakeLights() {
     const braking = car.userData.braking;
     car.userData.brakeLights.forEach((material) => {
       material.color.setHex(braking ? 0xff0000 : 0x660000);
-      material.emissive.setHex(braking ? 0xff0000 : 0x330000);
-      material.emissiveIntensity = braking ? 4.2 : 0.25;
     });
   });
 }
@@ -1884,9 +1891,13 @@ function setDriveKey(event, pressed) {
   }
   if (pressed) {
     state.drive.keys.add(event.code);
+    if (event.code === "KeyW" || event.code === "ArrowUp") {
+      state.drive.acceleratorDeadline = performance.now() + 1200;
+    }
   } else {
     state.drive.keys.delete(event.code);
     if (event.code === "KeyW" || event.code === "ArrowUp") {
+      state.drive.acceleratorDeadline = 0;
       state.driverCar.userData.driveThrottle = 0;
     }
   }
@@ -1894,6 +1905,7 @@ function setDriveKey(event, pressed) {
 
 function releaseDriveInputs() {
   state.drive.keys.clear();
+  state.drive.acceleratorDeadline = 0;
   if (!state.driverCar) return;
   state.driverCar.userData.driveThrottle = 0;
   state.driverCar.userData.driveSteer = 0;
