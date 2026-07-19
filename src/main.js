@@ -85,6 +85,7 @@ const state = {
     signal: null,
     cruise: {
       active: false,
+      adaptive: false,
       speed: 0,
     },
   },
@@ -627,6 +628,7 @@ function setDriveMode(enabled) {
   const car = state.driverCar;
   state.drive.signal = null;
   state.drive.cruise.active = false;
+  state.drive.cruise.adaptive = false;
   state.drive.cruise.speed = 0;
   if (enabled) {
     state.lanes.forEach((lane) => {
@@ -708,6 +710,43 @@ function setAmbulanceMode(enabled) {
   }
 }
 
+function getAdaptiveCruiseTargetSpeed(player, setSpeed) {
+  const data = player.userData;
+  const forwardX = Math.sin(data.driveHeading);
+  const forwardZ = Math.cos(data.driveHeading);
+  const sideX = forwardZ;
+  const sideZ = -forwardX;
+  let nearestDistance = Infinity;
+  let leadSpeed = setSpeed;
+
+  state.cars.forEach((car) => {
+    if (car === player) return;
+    const carHeading = car.userData.driveHeading ?? car.rotation.y;
+    const sameDirection = Math.cos(carHeading - data.driveHeading) > 0.35;
+    if (!sameDirection) return;
+
+    const dx = car.position.x - player.position.x;
+    const dz = car.position.z - player.position.z;
+    const distanceAhead = dx * forwardX + dz * forwardZ;
+    const lateralDistance = Math.abs(dx * sideX + dz * sideZ);
+    if (distanceAhead <= 0 || distanceAhead > 125 || lateralDistance > 4.6) return;
+    if (distanceAhead < nearestDistance) {
+      nearestDistance = distanceAhead;
+      leadSpeed = Math.max(car.userData.speed ?? 0, 0);
+    }
+  });
+
+  if (!Number.isFinite(nearestDistance)) return setSpeed;
+  const speedMph = data.speed * 760;
+  const desiredGap = 12 + speedMph * 0.72;
+  const clearGap = desiredGap + 25;
+  if (nearestDistance >= clearGap) return setSpeed;
+
+  const gapBlend = THREE.MathUtils.smoothstep(nearestDistance, 7, clearGap);
+  const followSpeed = nearestDistance < 8 ? 0 : leadSpeed;
+  return Math.min(setSpeed, THREE.MathUtils.lerp(followSpeed, setSpeed, gapBlend));
+}
+
 function updatePlayerDriving(delta) {
   if (state.pov !== "drive") return;
 
@@ -720,6 +759,7 @@ function updatePlayerDriving(delta) {
 
   if (braking && state.drive.cruise.active) {
     state.drive.cruise.active = false;
+    state.drive.cruise.adaptive = false;
   }
   const throttleTarget = (accelerating || state.drive.cruise.active) && !braking ? 1 : 0;
   data.driveThrottle = THREE.MathUtils.lerp(
@@ -749,7 +789,17 @@ function updatePlayerDriving(delta) {
     const acceleration = 0.025 + data.driveThrottle * 0.035;
     data.speed = Math.min(data.speed + delta * acceleration, 0.105);
   } else if (state.drive.cruise.active) {
-    data.speed = state.drive.cruise.speed;
+    if (state.drive.cruise.adaptive) {
+      const targetSpeed = getAdaptiveCruiseTargetSpeed(state.driverCar, state.drive.cruise.speed);
+      const response = targetSpeed < data.speed ? 0.1 : 0.035;
+      data.speed += THREE.MathUtils.clamp(
+        targetSpeed - data.speed,
+        -delta * response,
+        delta * response,
+      );
+    } else {
+      data.speed = state.drive.cruise.speed;
+    }
   } else {
     data.speed = Math.max(data.speed - delta * 0.009, 0);
     if (data.speed < 0.0015) data.speed = 0;
@@ -781,7 +831,7 @@ function updatePlayerDriving(delta) {
     Math.round(Math.hypot(actualLongitudinalSpeed, actualLateralSpeed) * (760 / 368)),
   );
   const cruiseStatus = state.drive.cruise.active
-    ? ` · CRUISE ${Math.round(state.drive.cruise.speed * 760)} mph`
+    ? ` · ${state.drive.cruise.adaptive ? "ADAPTIVE" : "CRUISE"} ${Math.round(state.drive.cruise.speed * 760)} mph`
     : "";
   statusEl.textContent = `YOU DRIVE · ${displaySpeed} mph${displaySpeed === 0 ? " · STOPPED" : ""}${cruiseStatus}`;
 }
@@ -1746,6 +1796,7 @@ function setDriveKey(event, pressed) {
     event.preventDefault();
     if (pressed && !event.repeat) {
       state.drive.cruise.active = !state.drive.cruise.active;
+      state.drive.cruise.adaptive = false;
       state.drive.cruise.speed = state.driverCar.userData.speed;
       statusEl.textContent = state.drive.cruise.active
         ? `Cruise control: ${Math.round(state.drive.cruise.speed * 760)} mph`
@@ -1754,11 +1805,26 @@ function setDriveKey(event, pressed) {
     }
     return;
   }
+  if (event.code === "Digit1" && state.pov === "drive") {
+    event.preventDefault();
+    if (pressed && !event.repeat) {
+      const enabled = !(state.drive.cruise.active && state.drive.cruise.adaptive);
+      state.drive.cruise.active = enabled;
+      state.drive.cruise.adaptive = enabled;
+      state.drive.cruise.speed = state.driverCar.userData.speed;
+      statusEl.textContent = enabled
+        ? `Adaptive cruise: ${Math.round(state.drive.cruise.speed * 760)} mph`
+        : "Adaptive cruise: Off";
+      playControlClick();
+    }
+    return;
+  }
   if (event.code === "ArrowUp" && state.pov === "drive" && state.drive.cruise.active) {
     event.preventDefault();
     if (pressed) {
       state.drive.cruise.speed = Math.min(state.drive.cruise.speed + 1 / 760, 0.105);
-      statusEl.textContent = `Cruise control: ${Math.round(state.drive.cruise.speed * 760)} mph`;
+      const cruiseLabel = state.drive.cruise.adaptive ? "Adaptive cruise" : "Cruise control";
+      statusEl.textContent = `${cruiseLabel}: ${Math.round(state.drive.cruise.speed * 760)} mph`;
     }
     return;
   }
@@ -1767,6 +1833,7 @@ function setDriveKey(event, pressed) {
   if (state.pov === "drive") event.preventDefault();
   if (pressed && (event.code === "KeyS" || event.code === "ArrowDown") && state.drive.cruise.active) {
     state.drive.cruise.active = false;
+    state.drive.cruise.adaptive = false;
     statusEl.textContent = "Cruise control: Cancelled by brake";
   }
   if (pressed) state.drive.keys.add(event.code);
