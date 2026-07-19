@@ -445,6 +445,7 @@ function createTraffic() {
         targetSpeed: lane.speed,
         cooldown: THREE.MathUtils.randFloat(0.8, 2.6),
         changingLane: false,
+        emergencySwerve: false,
         changeT: 0,
         intendedLane: null,
         targetLane: null,
@@ -1020,7 +1021,7 @@ function setAmbulanceYieldIndicator(carData, targetLane) {
     : (targetIsWorldRight ? "left" : "right");
 }
 
-function startLaneChange(car, targetLane) {
+function startLaneChange(car, targetLane, emergency = false) {
   const data = car.userData;
   const ambulanceData = state.driverCar.userData;
   if (
@@ -1038,11 +1039,12 @@ function startLaneChange(car, targetLane) {
   }
   data.intendedLane = null;
   data.changingLane = true;
+  data.emergencySwerve = emergency;
   data.changeT = 0;
   data.targetLane = targetLane.id;
   // Reserve the destination immediately. This makes every following gap check
   // and spacing pass account for the car throughout the entire merge.
-  if (!targetLane.cars.includes(car)) {
+  if (!emergency && !targetLane.cars.includes(car)) {
     targetLane.cars.push(car);
   }
   data.targetZ = targetLane.z;
@@ -1067,6 +1069,7 @@ function finishLaneChange(car) {
   data.currentZ = targetLane.z;
   data.targetZ = targetLane.z;
   data.changingLane = false;
+  data.emergencySwerve = false;
   data.intendedLane = null;
   data.targetLane = null;
   data.indicatorSide = null;
@@ -1114,7 +1117,8 @@ function updateLaneChangeMotion(car, delta) {
     return;
   }
 
-  data.changeT = Math.min(data.changeT + delta / 3.25, 1);
+  const laneChangeSeconds = data.emergencySwerve ? 0.72 : 3.25;
+  data.changeT = Math.min(data.changeT + delta / laneChangeSeconds, 1);
   const eased = 0.5 - Math.cos(data.changeT * Math.PI) * 0.5;
   data.currentZ = THREE.MathUtils.lerp(data.startZ, data.targetZ, eased);
   if (data.changeT >= 1) {
@@ -1246,6 +1250,35 @@ function updateDriverAvoidance() {
   state.cars.forEach((car) => {
     if (car === player) return;
     const data = car.userData;
+    const dx = player.position.x - car.position.x;
+    const playerVelocityX = Math.sin(playerData.driveHeading) * playerData.speed * 368
+      + playerData.physicsXVelocity;
+    const carVelocityX = data.dir * data.speed * 368 + data.physicsXVelocity;
+    const relativeVelocityX = playerVelocityX - carVelocityX;
+    const collisionCourse = dx * relativeVelocityX < 0;
+    const timeToImpact = collisionCourse
+      ? Math.abs(dx) / Math.max(Math.abs(relativeVelocityX), 0.01)
+      : Infinity;
+    const playerZ = playerData.currentZ + playerData.physicsZ;
+    const carZ = data.currentZ + data.physicsZ;
+    const impactLateralDistance = Math.abs(playerZ - carZ);
+    const imminentImpact = !data.changingLane
+      && impactLateralDistance < 4.2
+      && Math.abs(dx) < 58
+      && (timeToImpact < 1.65 || Math.abs(dx) < 14);
+
+    if (imminentImpact) {
+      const emergencyLane = state.lanes[data.lane]?.neighbor;
+      if (emergencyLane) {
+        startLaneChange(car, emergencyLane, true);
+      } else {
+        const escapeDirection = playerZ >= carZ ? -1 : 1;
+        data.physicsZVelocity += escapeDirection * 9;
+      }
+      data.targetSpeed = Math.max(data.targetSpeed, data.baseSpeed * 1.15);
+      return;
+    }
+
     const longitudinal = (player.position.x - car.position.x) * data.dir;
     const lateral = Math.abs((playerData.currentZ + playerData.physicsZ) - (data.currentZ + data.physicsZ));
     if (longitudinal <= 0 || longitudinal > 72 || lateral > 8.5) return;
@@ -1439,6 +1472,20 @@ function enforceHardLaneClearance(lane) {
   }
 }
 
+function vehicleVelocity(car) {
+  const data = car.userData;
+  if (car === state.driverCar && state.pov === "drive") {
+    return new THREE.Vector2(
+      Math.sin(data.driveHeading) * data.speed * 368 + data.physicsXVelocity,
+      data.driveLateralVelocity + data.physicsZVelocity,
+    );
+  }
+  return new THREE.Vector2(
+    data.dir * data.speed * 368 + data.physicsXVelocity,
+    data.physicsZVelocity,
+  );
+}
+
 function updateCollisionPhysics(delta) {
   state.cars.forEach((car) => {
     const data = car.userData;
@@ -1451,63 +1498,63 @@ function updateCollisionPhysics(delta) {
   });
 
   if (state.pov !== "drive") return;
-  const player = state.driverCar;
-  state.cars.forEach((other) => {
-    if (other === player) return;
-    const dx = other.position.x - player.position.x;
-    const dz = other.position.z - player.position.z;
-    const xLimit = (player.userData.length + other.userData.length) * 0.5;
+  for (let i = 0; i < state.cars.length; i += 1) {
+    for (let j = i + 1; j < state.cars.length; j += 1) {
+    const first = state.cars[i];
+    const second = state.cars[j];
+    const dx = second.position.x - first.position.x;
+    const dz = second.position.z - first.position.z;
+    const xLimit = (first.userData.length + second.userData.length) * 0.5;
     const zLimit = 3.35;
     const scaledDistance = Math.hypot(dx / xLimit, dz / zLimit);
-    if (scaledDistance >= 1) return;
+    if (scaledDistance >= 1) continue;
 
-    const cooldown = state.drive.collisionCooldown.get(other) ?? 0;
-    if (clock.elapsedTime < cooldown) return;
-    state.drive.collisionCooldown.set(other, clock.elapsedTime + 0.14);
+    const pairKey = `${i}:${j}`;
+    const cooldown = state.drive.collisionCooldown.get(pairKey) ?? 0;
+    if (clock.elapsedTime < cooldown) continue;
+    state.drive.collisionCooldown.set(pairKey, clock.elapsedTime + 0.14);
 
     const normal = new THREE.Vector2(dx / (xLimit * xLimit), dz / (zLimit * zLimit));
-    if (normal.lengthSq() < 0.0001) normal.set(player.userData.dir, 0.25);
+    if (normal.lengthSq() < 0.0001) normal.set(first.userData.dir, 0.25);
     normal.normalize();
 
-    const playerVelocity = new THREE.Vector2(
-      Math.sin(player.userData.driveHeading) * player.userData.speed * 368
-        + player.userData.physicsXVelocity,
-      player.userData.driveLateralVelocity + player.userData.physicsZVelocity,
-    );
-    const otherVelocity = new THREE.Vector2(
-      other.userData.dir * other.userData.speed * 368 + other.userData.physicsXVelocity,
-      other.userData.physicsZVelocity,
-    );
-    const relativeNormalSpeed = otherVelocity.clone().sub(playerVelocity).dot(normal);
-    const playerInverseMass = 1 / player.userData.mass;
-    const otherInverseMass = 1 / other.userData.mass;
-    const impulse = relativeNormalSpeed < 0
-      ? -(1 + 0.34) * relativeNormalSpeed / (playerInverseMass + otherInverseMass)
+    const firstVelocity = vehicleVelocity(first);
+    const secondVelocity = vehicleVelocity(second);
+    const relativeNormalSpeed = secondVelocity.clone().sub(firstVelocity).dot(normal);
+    const firstInverseMass = 1 / first.userData.mass;
+    const secondInverseMass = 1 / second.userData.mass;
+    const impactImpulse = relativeNormalSpeed < 0
+      ? -(1 + 0.34) * relativeNormalSpeed / (firstInverseMass + secondInverseMass)
       : 0;
+    const penetration = 1 - scaledDistance;
+    const impulse = Math.max(
+      impactImpulse,
+      penetration * 18 / (firstInverseMass + secondInverseMass),
+    );
 
-    player.userData.physicsXVelocity -= impulse * playerInverseMass * normal.x;
-    player.userData.physicsZVelocity -= impulse * playerInverseMass * normal.y;
-    other.userData.physicsXVelocity += impulse * otherInverseMass * normal.x;
-    other.userData.physicsZVelocity += impulse * otherInverseMass * normal.y;
+    first.userData.physicsXVelocity -= impulse * firstInverseMass * normal.x;
+    first.userData.physicsZVelocity -= impulse * firstInverseMass * normal.y;
+    second.userData.physicsXVelocity += impulse * secondInverseMass * normal.x;
+    second.userData.physicsZVelocity += impulse * secondInverseMass * normal.y;
 
     const hitSide = Math.sign(dz) || (Math.random() < 0.5 ? -1 : 1);
     const spinImpulse = Math.min(impulse * 0.11, 6.5);
-    player.userData.spinVelocity -= hitSide * spinImpulse * playerInverseMass;
-    other.userData.spinVelocity += hitSide * spinImpulse * otherInverseMass;
+    first.userData.spinVelocity -= hitSide * spinImpulse * firstInverseMass;
+    second.userData.spinVelocity += hitSide * spinImpulse * secondInverseMass;
 
-    const penetration = 1 - scaledDistance;
-    const totalInverseMass = playerInverseMass + otherInverseMass;
+    const totalInverseMass = firstInverseMass + secondInverseMass;
     const separationX = normal.x * penetration * xLimit * 0.72;
     const separationZ = normal.y * penetration * zLimit * 0.72;
-    player.userData.progress -= separationX * (playerInverseMass / totalInverseMass) / 368;
-    other.userData.progress += separationX * (otherInverseMass / totalInverseMass) / 368;
-    player.userData.physicsZ -= separationZ * (playerInverseMass / totalInverseMass);
-    other.userData.physicsZ += separationZ * (otherInverseMass / totalInverseMass);
+    first.userData.progress -= separationX * (firstInverseMass / totalInverseMass) / 368;
+    second.userData.progress += separationX * (secondInverseMass / totalInverseMass) / 368;
+    first.userData.physicsZ -= separationZ * (firstInverseMass / totalInverseMass);
+    second.userData.physicsZ += separationZ * (secondInverseMass / totalInverseMass);
 
     const energyLoss = THREE.MathUtils.clamp(impulse / 65, 0, 0.42);
-    player.userData.speed *= 1 - energyLoss * 0.7;
-    other.userData.speed *= 1 - energyLoss;
-  });
+    first.userData.speed *= 1 - energyLoss * 0.85;
+    second.userData.speed *= 1 - energyLoss * 0.85;
+    }
+  }
 }
 
 function createTrees() {
