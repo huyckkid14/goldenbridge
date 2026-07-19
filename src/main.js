@@ -446,6 +446,7 @@ function createTraffic() {
         cooldown: THREE.MathUtils.randFloat(0.8, 2.6),
         changingLane: false,
         changeT: 0,
+        intendedLane: null,
         targetLane: null,
         targetZ: lane.z,
         signalLights: car.userData.signalLights,
@@ -713,6 +714,10 @@ function setAmbulanceMode(enabled) {
     const protectedLaneId = getAmbulanceLaneId();
     state.cars.forEach((car) => {
       const carData = car.userData;
+      if (car !== state.driverCar) {
+        carData.intendedLane = null;
+        if (!carData.changingLane) carData.indicatorSide = null;
+      }
       if (car === state.driverCar || !carData.changingLane) return;
       const movingIntoAmbulanceLane = carData.targetLane === protectedLaneId;
       const outsideLane = getOuterLane(carData.dir);
@@ -1026,9 +1031,12 @@ function startLaneChange(car, targetLane) {
       || (data.dir !== ambulanceData.dir && targetLane.id !== getOuterLane(data.dir).id)
     )
   ) {
+    data.intendedLane = null;
+    data.indicatorSide = null;
     data.cooldown = THREE.MathUtils.randFloat(0.8, 1.5);
     return false;
   }
+  data.intendedLane = null;
   data.changingLane = true;
   data.changeT = 0;
   data.targetLane = targetLane.id;
@@ -1059,6 +1067,7 @@ function finishLaneChange(car) {
   data.currentZ = targetLane.z;
   data.targetZ = targetLane.z;
   data.changingLane = false;
+  data.intendedLane = null;
   data.targetLane = null;
   data.indicatorSide = null;
   data.cooldown = THREE.MathUtils.randFloat(2.4, 5.2);
@@ -1068,16 +1077,32 @@ function updateLaneChangeIntent(car, delta) {
   const data = car.userData;
   if (car === state.driverCar && state.pov === "drive") return;
   if (data.changingLane) return;
+  if (state.drive.ambulance && !data.ambulanceYielding) {
+    data.intendedLane = null;
+    data.indicatorSide = null;
+    return;
+  }
 
-  data.cooldown -= delta;
-  if (data.cooldown > 0) return;
+  if (data.intendedLane === null) {
+    data.cooldown -= delta;
+    if (data.cooldown > 0) return;
 
-  const lane = state.lanes[data.lane];
-  const targetLane = lane.neighbor;
-  if (targetLane && isLaneGapClear(car, targetLane)) {
+    const lane = state.lanes[data.lane];
+    const targetLane = lane.neighbor;
+    if (!targetLane) {
+      data.cooldown = THREE.MathUtils.randFloat(0.7, 1.7);
+      return;
+    }
+    data.intendedLane = targetLane.id;
+    const targetIsWorldRight = targetLane.z < data.currentZ;
+    data.indicatorSide = data.dir === 1
+      ? (targetIsWorldRight ? "right" : "left")
+      : (targetIsWorldRight ? "left" : "right");
+  }
+
+  const targetLane = state.lanes[data.intendedLane];
+  if (isLaneGapClear(car, targetLane)) {
     startLaneChange(car, targetLane);
-  } else {
-    data.cooldown = THREE.MathUtils.randFloat(0.7, 1.7);
   }
 }
 
@@ -1110,7 +1135,8 @@ function updateTurnIndicators() {
     const signalIsOn = (side) => (
       playerLampSide === "hazard"
       || playerLampSide === side
-      || ((data.changingLane || data.ambulanceYielding) && data.indicatorSide === side)
+      || ((data.changingLane || data.ambulanceYielding || data.intendedLane !== null)
+        && data.indicatorSide === side)
     );
     data.signalLights.forEach(({ side, material }) => {
       const isTurningSide = signalIsOn(side);
