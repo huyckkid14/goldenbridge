@@ -1195,6 +1195,45 @@ function updateYieldingSpeeds() {
   });
 }
 
+function requestSignalMergeGap(mergingCar, targetLane) {
+  targetLane.cars.forEach((other) => {
+    if (other === mergingCar || other === state.driverCar) return;
+    const distanceBehind = progressDistanceAhead(other, mergingCar);
+    if (distanceBehind <= 0 || distanceBehind > 0.16) return;
+
+    const urgency = THREE.MathUtils.clamp(1 - distanceBehind / 0.16, 0, 1);
+    const yieldingSpeed = other.userData.baseSpeed
+      * THREE.MathUtils.lerp(1.05, 0.38, urgency);
+    other.userData.targetSpeed = Math.min(other.userData.targetSpeed, yieldingSpeed);
+  });
+}
+
+function applyTurnSignalYielding() {
+  if (state.drive.ambulance) return;
+
+  state.cars.forEach((car) => {
+    const intendedLane = car.userData.intendedLane;
+    if (intendedLane === null) return;
+    requestSignalMergeGap(car, state.lanes[intendedLane]);
+  });
+
+  if (state.pov !== "drive" || !["left", "right"].includes(state.drive.signal)) return;
+  const player = state.driverCar;
+  const data = player.userData;
+  const currentLane = state.lanes
+    .filter((lane) => lane.dir === data.dir)
+    .sort((a, b) => Math.abs(a.z - data.currentZ) - Math.abs(b.z - data.currentZ))[0];
+  const targetLane = currentLane?.neighbor;
+  if (!targetLane) return;
+
+  const targetIsWorldRight = targetLane.z < data.currentZ;
+  const requiredLampSide = data.dir === 1
+    ? (targetIsWorldRight ? "right" : "left")
+    : (targetIsWorldRight ? "left" : "right");
+  const playerLampSide = state.drive.signal === "left" ? "right" : "left";
+  if (playerLampSide === requiredLampSide) requestSignalMergeGap(player, targetLane);
+}
+
 function updateDriverAvoidance() {
   const player = state.driverCar;
   const playerData = player.userData;
@@ -1649,6 +1688,7 @@ function applySetting(setting) {
 function updateTraffic(delta) {
   state.cars.forEach((car) => updateLaneChangeIntent(car, delta));
   updateYieldingSpeeds();
+  applyTurnSignalYielding();
   state.lanes.forEach(enforceLaneSpacing);
   enforceTrafficClearance();
   enforceAmbulanceLaneFlow();
