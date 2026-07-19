@@ -582,8 +582,8 @@ function createCar(color, truck = false) {
   });
   const makeTailLight = (side) => {
     const material = new THREE.MeshStandardMaterial({
-      color: 0xff2f26,
-      emissive: 0xff1a12,
+      color: 0xff0000,
+      emissive: 0xff0000,
       emissiveIntensity: 0.35,
     });
     const light = makeMesh(
@@ -602,8 +602,8 @@ function createCar(color, truck = false) {
   group.add(makeTailLight("right"));
   [-0.34, 0.34].forEach((x) => {
     const brakeMaterial = new THREE.MeshStandardMaterial({
-      color: 0x8f100c,
-      emissive: 0x3b0201,
+      color: 0x660000,
+      emissive: 0x330000,
       emissiveIntensity: 0.25,
     });
     group.userData.brakeLights.push(brakeMaterial);
@@ -1035,12 +1035,12 @@ function updateTurnIndicators() {
       const isTurningSide = playerSignalOn
         || ((data.changingLane || data.ambulanceYielding) && data.indicatorSide === side);
       if (isTurningSide && blinkOn) {
-        material.color.setHex(0xff2018);
-        material.emissive.setHex(0xff0804);
+        material.color.setHex(0xff0000);
+        material.emissive.setHex(0xff0000);
         material.emissiveIntensity = 3.2;
       } else {
-        material.color.setHex(0xff2f26);
-        material.emissive.setHex(0xff1a12);
+        material.color.setHex(0xff0000);
+        material.emissive.setHex(0xff0000);
         material.emissiveIntensity = 0.35;
       }
     });
@@ -1051,8 +1051,8 @@ function updateBrakeLights() {
   state.cars.forEach((car) => {
     const braking = car.userData.braking;
     car.userData.brakeLights.forEach((material) => {
-      material.color.setHex(braking ? 0xff160e : 0x8f100c);
-      material.emissive.setHex(braking ? 0xff0502 : 0x3b0201);
+      material.color.setHex(braking ? 0xff0000 : 0x660000);
+      material.emissive.setHex(braking ? 0xff0000 : 0x330000);
       material.emissiveIntensity = braking ? 4.2 : 0.25;
     });
   });
