@@ -222,6 +222,14 @@ p,
   border-color: #fff;
 }
 
+.drive-help button:disabled {
+  cursor: not-allowed;
+  color: #6f7880;
+  background: #303840;
+  border-color: #4b5660;
+  opacity: 0.65;
+}
+
 .driver-cockpit {
   position: fixed;
   inset: 0;

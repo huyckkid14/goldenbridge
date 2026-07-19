@@ -8,6 +8,7 @@ const cockpitEl = document.querySelector("#driverCockpit");
 const driveHelpEl = document.querySelector("#driveHelp");
 const driveCameraButton = document.querySelector("#driveCameraButton");
 const ambulanceButton = document.querySelector("#ambulanceButton");
+const centerLaneButton = document.querySelector("#centerLaneButton");
 const soundButton = document.querySelector("#soundControls button");
 const steeringWheelEl = document.querySelector(".wheel");
 const fpsOverlay = document.querySelector("#fpsOverlay");
@@ -866,6 +867,55 @@ function updatePlayerDriving(delta) {
     ? ` · ${state.drive.cruise.adaptive ? "ADAPTIVE" : "CRUISE"} ${Math.round(state.drive.cruise.speed * 760)} mph`
     : "";
   statusEl.textContent = `YOU DRIVE · ${displaySpeed} mph${displaySpeed === 0 ? " · STOPPED" : ""}${cruiseStatus}`;
+  updateCenterLaneButton();
+}
+
+function getClearlyOccupiedLane() {
+  if (state.pov !== "drive") return null;
+  const data = state.driverCar.userData;
+  const carCenterZ = data.currentZ + (data.physicsZ ?? 0);
+  const heading = data.driveHeading;
+  const halfLength = data.length / 2;
+  const halfWidth = 1.6;
+  const lateralHalfExtent = Math.abs(Math.cos(heading)) * halfLength
+    + Math.abs(Math.sin(heading)) * halfWidth;
+  const usableLaneHalfWidth = 3.25 - 0.3;
+  const occupiedLanes = state.lanes.filter((lane) => (
+    Math.abs(carCenterZ - lane.z) + lateralHalfExtent < usableLaneHalfWidth
+  ));
+  return occupiedLanes.length === 1 ? occupiedLanes[0] : null;
+}
+
+function updateCenterLaneButton() {
+  const lane = getClearlyOccupiedLane();
+  centerLaneButton.disabled = !lane;
+  centerLaneButton.title = lane
+    ? "Center and straighten the car in this lane"
+    : "Move fully inside one lane to enable centering";
+}
+
+function centerPlayerInLane() {
+  const lane = getClearlyOccupiedLane();
+  if (!lane) return;
+  const data = state.driverCar.userData;
+  data.lane = lane.id;
+  data.dir = lane.dir;
+  data.z = lane.z;
+  data.currentZ = lane.z;
+  data.targetZ = lane.z;
+  data.physicsZ = 0;
+  data.physicsZVelocity = 0;
+  data.physicsXVelocity = 0;
+  data.spin = 0;
+  data.spinVelocity = 0;
+  data.driveLateralVelocity = 0;
+  data.driveSteer = 0;
+  data.steeringWheelAngle = 0;
+  data.driveHeading = lane.dir === 1 ? Math.PI / 2 : Math.PI * 1.5;
+  state.drive.signal = null;
+  steeringWheelEl.style.transform = "translateX(-50%) rotateX(18deg) rotateZ(0rad)";
+  statusEl.textContent = "Centered and straightened in lane";
+  updateCenterLaneButton();
 }
 
 function circularDistance(a, b) {
@@ -1818,6 +1868,11 @@ function bindControls() {
 
   ambulanceButton.addEventListener("click", () => {
     setAmbulanceMode(!state.drive.ambulance);
+    playControlClick();
+  });
+
+  centerLaneButton.addEventListener("click", () => {
+    centerPlayerInLane();
     playControlClick();
   });
 }
