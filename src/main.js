@@ -644,6 +644,7 @@ function updateCarPosition(car, delta) {
 
 function setDriveMode(enabled) {
   const car = state.driverCar;
+  releaseDriveInputs();
   state.drive.signal = null;
   state.drive.cruise.active = false;
   state.drive.cruise.adaptive = false;
@@ -1869,7 +1870,11 @@ function setDriveKey(event, pressed) {
   }
   const driveKeys = ["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowLeft", "ArrowDown", "ArrowRight"];
   if (!driveKeys.includes(event.code)) return;
-  if (state.pov === "drive") event.preventDefault();
+  if (state.pov !== "drive") {
+    state.drive.keys.delete(event.code);
+    return;
+  }
+  event.preventDefault();
   if (pressed && (event.code === "KeyS" || event.code === "ArrowDown") && state.drive.cruise.active) {
     state.drive.cruise.active = false;
     state.drive.cruise.adaptive = false;
@@ -1877,6 +1882,13 @@ function setDriveKey(event, pressed) {
   }
   if (pressed) state.drive.keys.add(event.code);
   else state.drive.keys.delete(event.code);
+}
+
+function releaseDriveInputs() {
+  state.drive.keys.clear();
+  if (!state.driverCar) return;
+  state.driverCar.userData.driveThrottle = 0;
+  state.driverCar.userData.driveSteer = 0;
 }
 
 function onResize() {
@@ -1905,6 +1917,9 @@ bindControls();
 window.addEventListener("resize", onResize);
 window.addEventListener("keydown", (event) => setDriveKey(event, true));
 window.addEventListener("keyup", (event) => setDriveKey(event, false));
-window.addEventListener("blur", () => state.drive.keys.clear());
+window.addEventListener("blur", releaseDriveInputs);
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) releaseDriveInputs();
+});
 setInterval(refreshFpsOverlay, 500);
 animate();
