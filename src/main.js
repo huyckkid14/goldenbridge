@@ -782,11 +782,13 @@ function updatePlayerDriving(delta) {
     state.drive.cruise.adaptive = false;
   }
   const throttleTarget = (accelerating || state.drive.cruise.active) && !braking ? 1 : 0;
-  data.driveThrottle = THREE.MathUtils.lerp(
-    data.driveThrottle,
-    throttleTarget,
-    1 - Math.exp(-delta * 4.5),
-  );
+  data.driveThrottle = throttleTarget === 0
+    ? 0
+    : THREE.MathUtils.lerp(
+      data.driveThrottle,
+      throttleTarget,
+      1 - Math.exp(-delta * 4.5),
+    );
   data.driveSteer = THREE.MathUtils.lerp(
     data.driveSteer,
     targetSteer,
@@ -822,7 +824,7 @@ function updatePlayerDriving(delta) {
       data.speed = state.drive.cruise.speed;
     }
   } else {
-    data.speed = Math.max(data.speed - delta * 0.009, 0);
+    data.speed = Math.max(data.speed - delta * 0.022, 0);
     if (data.speed < 0.0015) data.speed = 0;
   }
 
@@ -1880,8 +1882,14 @@ function setDriveKey(event, pressed) {
     state.drive.cruise.adaptive = false;
     statusEl.textContent = "Cruise control: Cancelled by brake";
   }
-  if (pressed) state.drive.keys.add(event.code);
-  else state.drive.keys.delete(event.code);
+  if (pressed) {
+    state.drive.keys.add(event.code);
+  } else {
+    state.drive.keys.delete(event.code);
+    if (event.code === "KeyW" || event.code === "ArrowUp") {
+      state.driverCar.userData.driveThrottle = 0;
+    }
+  }
 }
 
 function releaseDriveInputs() {
@@ -1918,6 +1926,7 @@ window.addEventListener("resize", onResize);
 window.addEventListener("keydown", (event) => setDriveKey(event, true));
 window.addEventListener("keyup", (event) => setDriveKey(event, false));
 window.addEventListener("blur", releaseDriveInputs);
+window.addEventListener("pagehide", releaseDriveInputs);
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) releaseDriveInputs();
 });
