@@ -1034,9 +1034,9 @@ function updateTurnIndicators() {
       const isTurningSide = playerSignalOn
         || ((data.changingLane || data.ambulanceYielding) && data.indicatorSide === side);
       if (isTurningSide && blinkOn) {
-        material.color.setHex(0xffb000);
-        material.emissive.setHex(0xff9c00);
-        material.emissiveIntensity = 1.6;
+        material.color.setHex(0xff2018);
+        material.emissive.setHex(0xff0804);
+        material.emissiveIntensity = 3.2;
       } else {
         material.color.setHex(0xff2f26);
         material.emissive.setHex(0xff1a12);
