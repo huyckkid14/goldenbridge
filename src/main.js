@@ -447,6 +447,7 @@ function createTraffic() {
         targetLane: null,
         targetZ: lane.z,
         signalLights: car.userData.signalLights,
+        brakeLights: car.userData.brakeLights,
         bodyMaterial: car.userData.bodyMaterial,
         originalBodyColor: car.userData.originalBodyColor,
         ambulanceRig: car.userData.ambulanceRig,
@@ -499,6 +500,7 @@ function createTraffic() {
 function createCar(color, truck = false) {
   const group = new THREE.Group();
   group.userData.signalLights = [];
+  group.userData.brakeLights = [];
   const bodyMat = new THREE.MeshStandardMaterial({
     color,
     roughness: 0.36,
@@ -598,6 +600,21 @@ function createCar(color, truck = false) {
   group.add(makeMesh(new THREE.BoxGeometry(0.75, 0.42, 0.22), headlightMat, new THREE.Vector3(0.9, 1.05, length / 2 + 0.04)));
   group.add(makeTailLight("left"));
   group.add(makeTailLight("right"));
+  [-0.34, 0.34].forEach((x) => {
+    const brakeMaterial = new THREE.MeshStandardMaterial({
+      color: 0x8f100c,
+      emissive: 0x3b0201,
+      emissiveIntensity: 0.25,
+    });
+    group.userData.brakeLights.push(brakeMaterial);
+    group.add(makeMesh(
+      new THREE.BoxGeometry(0.48, 0.4, 0.24),
+      brakeMaterial,
+      new THREE.Vector3(x, 1.02, -length / 2 - 0.06),
+      false,
+      false,
+    ));
+  });
   group.traverse((item) => {
     if (item.isMesh) {
       item.castShadow = false;
@@ -1020,15 +1037,22 @@ function updateTurnIndicators() {
         material.color.setHex(0xffb000);
         material.emissive.setHex(0xff9c00);
         material.emissiveIntensity = 1.6;
-      } else if (data.braking) {
-        material.color.setHex(0xff180f);
-        material.emissive.setHex(0xff0804);
-        material.emissiveIntensity = 3.2;
       } else {
         material.color.setHex(0xff2f26);
         material.emissive.setHex(0xff1a12);
         material.emissiveIntensity = 0.35;
       }
+    });
+  });
+}
+
+function updateBrakeLights() {
+  state.cars.forEach((car) => {
+    const braking = car.userData.braking;
+    car.userData.brakeLights.forEach((material) => {
+      material.color.setHex(braking ? 0xff160e : 0x8f100c);
+      material.emissive.setHex(braking ? 0xff0502 : 0x3b0201);
+      material.emissiveIntensity = braking ? 4.2 : 0.25;
     });
   });
 }
@@ -1531,6 +1555,7 @@ function updateTraffic(delta) {
   updatePlayerDriving(delta);
   updateCollisionPhysics(delta);
   updateTurnIndicators();
+  updateBrakeLights();
   updateAmbulanceLights();
   state.cars.forEach((car) => updateCarPosition(car, 0));
 }
