@@ -459,9 +459,7 @@ function createTraffic() {
         isDriver: false,
         length: car.userData.length,
         mass: car.userData.mass,
-        collisionHalfWidth: 1.96,
-        collisionMinY: -0.4,
-        collisionMaxY: car.userData.length > 8 ? 3.15 : 2.85,
+        collisionParts: car.userData.collisionParts,
         physicsXVelocity: 0,
         physicsY: 0,
         physicsYVelocity: 0,
@@ -524,11 +522,19 @@ function createCar(color, truck = false) {
     metalness: 0.16,
   });
   const length = truck ? 9.8 : 6.2;
+  const height = truck ? 2.6 : 1.65;
   group.userData.length = length;
   group.userData.mass = truck ? 1.85 : 1;
+  group.userData.collisionParts = [
+    { y: 0.9, z: 0, hx: 1.6, hy: height / 2, hz: length / 2 },
+    { y: 2.15, z: truck ? -2.3 : -0.2, hx: 1.4, hy: 0.675, hz: truck ? 1.7 : 1.55 },
+    { y: 0.22, z: 0, hx: 1.96, hy: 0.62, hz: length * 0.31 + 0.62 },
+  ];
+  if (truck) {
+    group.userData.collisionParts.push({ y: 1.7, z: 2.4, hx: 1.675, hy: 1.4, hz: 2.6 });
+  }
   group.userData.bodyMaterial = bodyMat;
   group.userData.originalBodyColor = color;
-  const height = truck ? 2.6 : 1.65;
   const body = makeMesh(
     new THREE.BoxGeometry(3.2, height, length),
     bodyMat,
@@ -1591,20 +1597,41 @@ function vehicleVelocity(car) {
 
 function requiredGroundLift(car) {
   const data = car.userData;
-  const halfWidth = data.collisionHalfWidth;
-  const halfHeight = (data.collisionMaxY - data.collisionMinY) * 0.5;
-  const centerY = (data.collisionMaxY + data.collisionMinY) * 0.5;
-  const halfLength = data.length * 0.5 + 0.65;
   const cosPitch = Math.cos(data.pitch);
   const sinPitch = Math.sin(data.pitch);
   const cosRoll = Math.cos(data.roll);
   const sinRoll = Math.sin(data.roll);
-  const rotatedCenterY = centerY * cosPitch * cosRoll;
-  const rotatedHalfHeight = Math.abs(sinRoll) * halfWidth
-    + Math.abs(cosPitch * cosRoll) * halfHeight
-    + Math.abs(sinPitch * cosRoll) * halfLength;
-  const rotatedLowestPoint = rotatedCenterY - rotatedHalfHeight;
-  return Math.max(0, data.collisionMinY - rotatedLowestPoint);
+  const rotatedLowestPoint = data.collisionParts.reduce((lowest, part) => {
+    const centerY = (part.y * cosPitch - part.z * sinPitch) * cosRoll;
+    const halfHeight = Math.abs(sinRoll) * part.hx
+      + Math.abs(cosPitch * cosRoll) * part.hy
+      + Math.abs(sinPitch * cosRoll) * part.hz;
+    return Math.min(lowest, centerY - halfHeight);
+  }, Infinity);
+  return Math.max(0, -0.4 - rotatedLowestPoint);
+}
+
+function enforceBridgeWallCollision(car) {
+  const data = car.userData;
+  const heading = (data.driveHeading ?? (data.dir === 1 ? Math.PI / 2 : Math.PI * 1.5))
+    + data.spin;
+  const lateralRadius = Math.abs(Math.cos(heading)) * (data.length * 0.5)
+    + Math.abs(Math.sin(heading)) * 1.96;
+  const centerLimit = 17.45 - lateralRadius;
+  const worldZ = data.currentZ + data.physicsZ;
+  const clampedZ = THREE.MathUtils.clamp(worldZ, -centerLimit, centerLimit);
+  if (clampedZ === worldZ) return;
+
+  const correction = clampedZ - worldZ;
+  if (car === state.driverCar && state.pov === "drive") {
+    data.currentZ += correction;
+  } else {
+    data.physicsZ += correction;
+  }
+  const inwardDirection = clampedZ > 0 ? -1 : 1;
+  data.physicsZVelocity = inwardDirection * Math.max(2.5, Math.abs(data.physicsZVelocity) * 0.42);
+  data.speed *= 0.72;
+  data.spinVelocity += inwardDirection * Math.min(data.speed * 38, 2.8);
 }
 
 function updateCollisionPhysics(delta) {
@@ -1690,6 +1717,7 @@ function updateCollisionPhysics(delta) {
     data.spin += data.spinVelocity * delta;
     data.pitch += data.pitchVelocity * delta;
     data.roll += data.rollVelocity * delta;
+    enforceBridgeWallCollision(car);
   });
 
   if (state.pov !== "drive") return;
