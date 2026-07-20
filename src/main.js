@@ -444,7 +444,6 @@ function createTraffic() {
         targetSpeed: lane.speed,
         cooldown: THREE.MathUtils.randFloat(0.8, 2.6),
         changingLane: false,
-        emergencySwerve: false,
         changeT: 0,
         intendedLane: null,
         targetLane: null,
@@ -1011,7 +1010,7 @@ function setAmbulanceYieldIndicator(carData, targetLane) {
     : (targetIsWorldRight ? "left" : "right");
 }
 
-function startLaneChange(car, targetLane, emergency = false) {
+function startLaneChange(car, targetLane) {
   const data = car.userData;
   const ambulanceData = state.driverCar.userData;
   if (
@@ -1029,12 +1028,11 @@ function startLaneChange(car, targetLane, emergency = false) {
   }
   data.intendedLane = null;
   data.changingLane = true;
-  data.emergencySwerve = emergency;
   data.changeT = 0;
   data.targetLane = targetLane.id;
   // Reserve the destination immediately. This makes every following gap check
   // and spacing pass account for the car throughout the entire merge.
-  if (!emergency && !targetLane.cars.includes(car)) {
+  if (!targetLane.cars.includes(car)) {
     targetLane.cars.push(car);
   }
   data.targetZ = targetLane.z;
@@ -1059,7 +1057,6 @@ function finishLaneChange(car) {
   data.currentZ = targetLane.z;
   data.targetZ = targetLane.z;
   data.changingLane = false;
-  data.emergencySwerve = false;
   data.intendedLane = null;
   data.targetLane = null;
   data.indicatorSide = null;
@@ -1107,8 +1104,7 @@ function updateLaneChangeMotion(car, delta) {
     return;
   }
 
-  const laneChangeSeconds = data.emergencySwerve ? 0.72 : 3.25;
-  data.changeT = Math.min(data.changeT + delta / laneChangeSeconds, 1);
+  data.changeT = Math.min(data.changeT + delta / 3.25, 1);
   const eased = 0.5 - Math.cos(data.changeT * Math.PI) * 0.5;
   data.currentZ = THREE.MathUtils.lerp(data.startZ, data.targetZ, eased);
   if (data.changeT >= 1) {
@@ -1240,35 +1236,6 @@ function updateDriverAvoidance() {
   state.cars.forEach((car) => {
     if (car === player) return;
     const data = car.userData;
-    const dx = player.position.x - car.position.x;
-    const playerVelocityX = Math.sin(playerData.driveHeading) * playerData.speed * 368
-      + playerData.physicsXVelocity;
-    const carVelocityX = data.dir * data.speed * 368 + data.physicsXVelocity;
-    const relativeVelocityX = playerVelocityX - carVelocityX;
-    const collisionCourse = dx * relativeVelocityX < 0;
-    const timeToImpact = collisionCourse
-      ? Math.abs(dx) / Math.max(Math.abs(relativeVelocityX), 0.01)
-      : Infinity;
-    const playerZ = playerData.currentZ + playerData.physicsZ;
-    const carZ = data.currentZ + data.physicsZ;
-    const impactLateralDistance = Math.abs(playerZ - carZ);
-    const imminentImpact = !data.changingLane
-      && impactLateralDistance < 4.2
-      && Math.abs(dx) < 58
-      && (timeToImpact < 1.65 || Math.abs(dx) < 14);
-
-    if (imminentImpact) {
-      const emergencyLane = state.lanes[data.lane]?.neighbor;
-      if (emergencyLane) {
-        startLaneChange(car, emergencyLane, true);
-      } else {
-        const escapeDirection = playerZ >= carZ ? -1 : 1;
-        data.physicsZVelocity += escapeDirection * 9;
-      }
-      data.targetSpeed = Math.max(data.targetSpeed, data.baseSpeed * 1.15);
-      return;
-    }
-
     const longitudinal = (player.position.x - car.position.x) * data.dir;
     const lateral = Math.abs((playerData.currentZ + playerData.physicsZ) - (data.currentZ + data.physicsZ));
     if (longitudinal <= 0 || longitudinal > 72 || lateral > 8.5) return;
