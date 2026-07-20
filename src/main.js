@@ -947,13 +947,35 @@ function minimumProgressGap(car, other, buffer = 3) {
   return (car.userData.length / 2 + other.userData.length / 2 + buffer) / roadLength;
 }
 
+function isBlockedVehicle(car) {
+  return car.userData.speed < 0.008 || car.userData.targetSpeed < 0.008;
+}
+
 function isLaneGapClear(car, lane) {
   if (state.pov === "drive" && car !== state.driverCar) {
-    const playerData = state.driverCar.userData;
+    const player = state.driverCar;
+    const playerData = player.userData;
     const playerNearTargetLane = Math.abs(playerData.currentZ - lane.z) < 5.5;
     const distanceToPlayer = circularDistance(car.userData.progress, playerData.progress) * 368;
-    if (playerNearTargetLane && distanceToPlayer < 55) return false;
+    if (playerNearTargetLane) {
+      const playerAhead = progressDistanceAhead(car, player);
+      const botWouldMergeAheadOfPlayer = playerAhead > 0.5;
+      if (distanceToPlayer < minimumProgressGap(car, player, 10) * 368) return false;
+      if (isBlockedVehicle(player)) {
+        if (botWouldMergeAheadOfPlayer && distanceToPlayer < 90) return false;
+      } else if (distanceToPlayer < 55) {
+        return false;
+      }
+    }
   }
+
+  const wouldMergeAheadOfBlockage = lane.cars.some((other) => {
+    if (other === car || !isBlockedVehicle(other)) return false;
+    const distanceBehind = progressDistanceAhead(other, car);
+    return distanceBehind > 0 && distanceBehind < 0.245;
+  });
+  if (wouldMergeAheadOfBlockage) return false;
+
   return lane.cars.every((other) => (
     other === car
     || circularDistance(car.userData.progress, other.userData.progress) > minimumProgressGap(car, other, 10)
