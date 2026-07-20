@@ -1582,14 +1582,45 @@ function updateCollisionPhysics(delta) {
   state.cars.forEach((car) => {
     const data = car.userData;
     if (data.crashedUntil && data.crashedUntil <= clock.elapsedTime) {
+      const lateralPosition = data.currentZ + (data.physicsZ ?? 0);
+      const recoveryLane = state.lanes
+        .filter((lane) => lane.dir === data.dir && isLaneGapClear(car, lane))
+        .sort((a, b) => Math.abs(a.z - lateralPosition) - Math.abs(b.z - lateralPosition))[0];
+      if (!recoveryLane) {
+        data.crashedUntil = clock.elapsedTime + 0.5;
+        return;
+      }
+
+      state.lanes.forEach((lane) => {
+        lane.cars = lane.cars.filter((item) => item !== car);
+      });
+      recoveryLane.cars.push(car);
       data.crashedUntil = 0;
+      data.lane = recoveryLane.id;
+      data.z = recoveryLane.z;
+      data.currentZ = recoveryLane.z;
+      data.targetZ = recoveryLane.z;
+      data.targetLane = null;
+      data.intendedLane = null;
+      data.changingLane = false;
+      data.changeT = 0;
+      data.laneChangeDuration = 3.25;
+      data.indicatorSide = null;
+      data.crossedYellowForWreck = null;
+      data.returnLaneAfterWreck = null;
+      data.physicsXVelocity = 0;
+      data.physicsZ = 0;
+      data.physicsZVelocity = 0;
       data.physicsY = 0;
       data.physicsYVelocity = 0;
+      data.spin = 0;
+      data.spinVelocity = 0;
       data.pitch = 0;
       data.pitchVelocity = 0;
       data.roll = 0;
       data.rollVelocity = 0;
-      data.spinVelocity = 0;
+      data.driveHeading = null;
+      data.baseSpeed = recoveryLane.speed;
       data.speed = Math.max(data.speed, data.baseSpeed * 0.45);
       data.targetSpeed = data.baseSpeed;
       data.cooldown = THREE.MathUtils.randFloat(1.2, 2.4);
