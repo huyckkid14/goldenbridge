@@ -84,7 +84,6 @@ const state = {
     camera: "dash",
     ambulance: false,
     signal: null,
-    acceleratorDeadline: 0,
     cruise: {
       active: false,
       adaptive: false,
@@ -794,15 +793,6 @@ function updatePlayerDriving(delta) {
 
   const data = state.driverCar.userData;
   const keys = state.drive.keys;
-  if (
-    state.drive.acceleratorDeadline > 0
-    && performance.now() > state.drive.acceleratorDeadline
-  ) {
-    keys.delete("KeyW");
-    keys.delete("ArrowUp");
-    state.drive.acceleratorDeadline = 0;
-    data.driveThrottle = 0;
-  }
   const accelerating = keys.has("KeyW") || keys.has("ArrowUp");
   const braking = keys.has("KeyS") || keys.has("ArrowDown");
   const targetSteer = Number(keys.has("KeyD") || keys.has("ArrowRight"))
@@ -856,7 +846,7 @@ function updatePlayerDriving(delta) {
       data.speed = state.drive.cruise.speed;
     }
   } else {
-    data.speed = Math.max(data.speed - delta * 0.022, 0);
+    data.speed = Math.max(data.speed - delta * 0.006, 0);
     if (data.speed < 0.0015) data.speed = 0;
   }
 
@@ -2081,13 +2071,9 @@ function setDriveKey(event, pressed) {
   }
   if (pressed) {
     state.drive.keys.add(event.code);
-    if (event.code === "KeyW" || event.code === "ArrowUp") {
-      state.drive.acceleratorDeadline = performance.now() + 1200;
-    }
   } else {
     state.drive.keys.delete(event.code);
     if (event.code === "KeyW" || event.code === "ArrowUp") {
-      state.drive.acceleratorDeadline = 0;
       state.driverCar.userData.driveThrottle = 0;
     }
   }
@@ -2095,7 +2081,6 @@ function setDriveKey(event, pressed) {
 
 function releaseDriveInputs() {
   state.drive.keys.clear();
-  state.drive.acceleratorDeadline = 0;
   if (!state.driverCar) return;
   state.driverCar.userData.driveThrottle = 0;
   state.driverCar.userData.driveSteer = 0;
@@ -2125,8 +2110,8 @@ createTraffic();
 applySetting("summer");
 bindControls();
 window.addEventListener("resize", onResize);
-window.addEventListener("keydown", (event) => setDriveKey(event, true));
-window.addEventListener("keyup", (event) => setDriveKey(event, false));
+document.addEventListener("keydown", (event) => setDriveKey(event, true), true);
+document.addEventListener("keyup", (event) => setDriveKey(event, false), true);
 window.addEventListener("blur", releaseDriveInputs);
 window.addEventListener("pagehide", releaseDriveInputs);
 document.addEventListener("visibilitychange", () => {
