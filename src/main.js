@@ -1539,14 +1539,19 @@ function updateCrashNavigation() {
       const opposingInsideLane = state.lanes
         .filter((candidate) => candidate.dir !== data.dir)
         .sort((a, b) => Math.abs(a.z) - Math.abs(b.z))[0];
+      const yellowLineSafetyDistance = 85;
       const yellowLineClear = opposingInsideLane
-        && opposingInsideLane.cars.every((other) => (
-          circularDistance(data.progress, other.userData.progress) > 0.078
+        && state.cars.every((other) => (
+          other === car
+          || other.userData.dir === data.dir
+          || circularDistance(data.progress, other.userData.progress) * 368
+            > yellowLineSafetyDistance
         ))
         && !(
           state.pov === "drive"
-          && Math.abs(state.driverCar.userData.currentZ - opposingInsideLane.z) < 5.5
-          && circularDistance(data.progress, state.driverCar.userData.progress) < 0.11
+          && state.driverCar !== car
+          && circularDistance(data.progress, state.driverCar.userData.progress) * 368
+            <= yellowLineSafetyDistance
         );
       if (yellowLineClear) {
         data.crossedYellowForWreck = state.cars.indexOf(wreck.other);
