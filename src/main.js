@@ -445,6 +445,7 @@ function createTraffic() {
         cooldown: THREE.MathUtils.randFloat(0.8, 2.6),
         changingLane: false,
         changeT: 0,
+        laneChangeDuration: 3.25,
         intendedLane: null,
         targetLane: null,
         targetZ: lane.z,
@@ -459,10 +460,19 @@ function createTraffic() {
         length: car.userData.length,
         mass: car.userData.mass,
         physicsXVelocity: 0,
+        physicsY: 0,
+        physicsYVelocity: 0,
         physicsZ: 0,
         physicsZVelocity: 0,
         spin: 0,
         spinVelocity: 0,
+        pitch: 0,
+        pitchVelocity: 0,
+        roll: 0,
+        rollVelocity: 0,
+        crashedUntil: 0,
+        crossedYellowForWreck: null,
+        returnLaneAfterWreck: null,
         driveSteer: 0,
         steeringWheelAngle: 0,
         driveThrottle: 0,
@@ -654,9 +664,11 @@ function updateCarPosition(car, delta) {
   data.progress = (data.progress + delta * data.speed * state.trafficSpeed * data.dir) % 1;
   const laneZ = data.currentZ ?? data.z;
   const point = trafficPoint(data.progress, laneZ);
-  car.position.set(point.x, point.y, point.z + (data.physicsZ ?? 0));
+  car.position.set(point.x, point.y + (data.physicsY ?? 0), point.z + (data.physicsZ ?? 0));
   const laneHeading = data.dir === 1 ? point.heading : point.heading + Math.PI;
   car.rotation.y = (data.driveHeading ?? laneHeading) + (data.spin ?? 0);
+  car.rotation.x = data.pitch ?? 0;
+  car.rotation.z = data.roll ?? 0;
 }
 
 function setDriveMode(enabled) {
@@ -969,8 +981,12 @@ function isLaneGapClear(car, lane) {
     }
   }
 
-  const wouldMergeAheadOfBlockage = lane.cars.some((other) => {
-    if (other === car || !isBlockedVehicle(other)) return false;
+  const wouldMergeAheadOfBlockage = state.cars.some((other) => {
+    if (
+      other === car
+      || !isBlockedVehicle(other)
+      || !physicallyOccupiesLane(other, lane)
+    ) return false;
     const distanceBehind = progressDistanceAhead(other, car);
     return distanceBehind > 0 && distanceBehind < 0.245;
   });
@@ -1032,7 +1048,7 @@ function setAmbulanceYieldIndicator(carData, targetLane) {
     : (targetIsWorldRight ? "left" : "right");
 }
 
-function startLaneChange(car, targetLane) {
+function startLaneChange(car, targetLane, duration = 3.25) {
   const data = car.userData;
   const ambulanceData = state.driverCar.userData;
   if (
@@ -1051,6 +1067,7 @@ function startLaneChange(car, targetLane) {
   data.intendedLane = null;
   data.changingLane = true;
   data.changeT = 0;
+  data.laneChangeDuration = duration;
   data.targetLane = targetLane.id;
   // Reserve the destination immediately. This makes every following gap check
   // and spacing pass account for the car throughout the entire merge.
@@ -1079,6 +1096,7 @@ function finishLaneChange(car) {
   data.currentZ = targetLane.z;
   data.targetZ = targetLane.z;
   data.changingLane = false;
+  data.laneChangeDuration = 3.25;
   data.intendedLane = null;
   data.targetLane = null;
   data.indicatorSide = null;
@@ -1088,6 +1106,8 @@ function finishLaneChange(car) {
 function updateLaneChangeIntent(car, delta) {
   const data = car.userData;
   if (car === state.driverCar && state.pov === "drive") return;
+  if (data.crashedUntil > clock.elapsedTime) return;
+  if (data.crossedYellowForWreck !== null) return;
   if (data.changingLane) return;
   if (state.drive.ambulance && !data.ambulanceYielding) {
     data.intendedLane = null;
@@ -1121,12 +1141,13 @@ function updateLaneChangeIntent(car, delta) {
 function updateLaneChangeMotion(car, delta) {
   const data = car.userData;
   if (car === state.driverCar && state.pov === "drive") return;
+  if (data.crashedUntil > clock.elapsedTime) return;
   if (!data.changingLane) {
     data.currentZ = data.z;
     return;
   }
 
-  data.changeT = Math.min(data.changeT + delta / 3.25, 1);
+  data.changeT = Math.min(data.changeT + delta / data.laneChangeDuration, 1);
   const eased = 0.5 - Math.cos(data.changeT * Math.PI) * 0.5;
   data.currentZ = THREE.MathUtils.lerp(data.startZ, data.targetZ, eased);
   if (data.changeT >= 1) {
@@ -1146,6 +1167,7 @@ function updateTurnIndicators() {
       : (driverSignal === "right" ? "left" : driverSignal);
     const signalIsOn = (side) => (
       playerLampSide === "hazard"
+      || data.crashedUntil > clock.elapsedTime
       || playerLampSide === side
       || ((data.changingLane || data.ambulanceYielding || data.intendedLane !== null)
         && data.indicatorSide === side)
@@ -1186,6 +1208,10 @@ function updateYieldingSpeeds() {
   state.cars.forEach((car) => {
     if (car === state.driverCar && state.pov === "drive") return;
     const data = car.userData;
+    if (data.crashedUntil > clock.elapsedTime) {
+      data.targetSpeed = 0;
+      return;
+    }
     const lateralPosition = data.currentZ + (data.physicsZ ?? 0);
     const lane = state.lanes
       .filter((candidate) => candidate.dir === data.dir)
@@ -1466,6 +1492,78 @@ function enforceHardLaneClearance(lane) {
   }
 }
 
+function updateCrashNavigation() {
+  state.cars.forEach((car) => {
+    const data = car.userData;
+    if (car === state.driverCar || data.crashedUntil > clock.elapsedTime || data.changingLane) return;
+
+    if (data.crossedYellowForWreck !== null) {
+      const wreck = state.cars[data.crossedYellowForWreck];
+      const returnLane = state.lanes[data.returnLaneAfterWreck];
+      const passedWreck = !wreck
+        || wreck.userData.crashedUntil <= clock.elapsedTime
+        || progressDistanceAhead(wreck, car) < 0.075;
+      if (passedWreck && returnLane && isLaneGapClear(car, returnLane)) {
+        startLaneChange(car, returnLane, 1.35);
+        data.crossedYellowForWreck = null;
+        data.returnLaneAfterWreck = null;
+      }
+      data.targetSpeed = Math.min(data.targetSpeed, data.baseSpeed * 0.52);
+      return;
+    }
+
+    const lane = state.lanes[data.lane];
+    const wreck = state.cars
+      .filter((other) => (
+        other !== car
+        && other.userData.crashedUntil > clock.elapsedTime
+        && physicallyOccupiesLane(other, lane)
+      ))
+      .map((other) => ({ other, distance: progressDistanceAhead(car, other) }))
+      .filter(({ distance }) => distance > 0 && distance < 0.2)
+      .sort((a, b) => a.distance - b.distance)[0];
+    if (!wreck) return;
+
+    const targetLane = lane.neighbor;
+    const regularLaneClear = targetLane && isLaneGapClear(car, targetLane);
+    if (targetLane) {
+      data.intendedLane = targetLane.id;
+      const targetIsWorldRight = targetLane.z < data.currentZ;
+      data.indicatorSide = data.dir === 1
+        ? (targetIsWorldRight ? "right" : "left")
+        : (targetIsWorldRight ? "left" : "right");
+      if (regularLaneClear) startLaneChange(car, targetLane);
+    }
+
+    if (!regularLaneClear && Math.abs(lane.z) < 7 && wreck.distance < 0.09) {
+      const opposingInsideLane = state.lanes
+        .filter((candidate) => candidate.dir !== data.dir)
+        .sort((a, b) => Math.abs(a.z) - Math.abs(b.z))[0];
+      const yellowLineClear = opposingInsideLane
+        && opposingInsideLane.cars.every((other) => (
+          circularDistance(data.progress, other.userData.progress) > 0.078
+        ))
+        && !(
+          state.pov === "drive"
+          && Math.abs(state.driverCar.userData.currentZ - opposingInsideLane.z) < 5.5
+          && circularDistance(data.progress, state.driverCar.userData.progress) < 0.11
+        );
+      if (yellowLineClear) {
+        data.crossedYellowForWreck = state.cars.indexOf(wreck.other);
+        data.returnLaneAfterWreck = lane.id;
+        data.intendedLane = null;
+        startLaneChange(car, opposingInsideLane, 1.35);
+      }
+    }
+
+    const stoppingDistance = 0.065;
+    if (wreck.distance < stoppingDistance) {
+      const blend = THREE.MathUtils.clamp(wreck.distance / stoppingDistance, 0, 1);
+      data.targetSpeed = Math.min(data.targetSpeed, data.baseSpeed * blend * 0.7);
+    }
+  });
+}
+
 function vehicleVelocity(car) {
   const data = car.userData;
   if (car === state.driverCar && state.pov === "drive") {
@@ -1483,12 +1581,46 @@ function vehicleVelocity(car) {
 function updateCollisionPhysics(delta) {
   state.cars.forEach((car) => {
     const data = car.userData;
+    if (data.crashedUntil && data.crashedUntil <= clock.elapsedTime) {
+      data.crashedUntil = 0;
+      data.physicsY = 0;
+      data.physicsYVelocity = 0;
+      data.pitch = 0;
+      data.pitchVelocity = 0;
+      data.roll = 0;
+      data.rollVelocity = 0;
+      data.spinVelocity = 0;
+      data.speed = Math.max(data.speed, data.baseSpeed * 0.45);
+      data.targetSpeed = data.baseSpeed;
+      data.cooldown = THREE.MathUtils.randFloat(1.2, 2.4);
+    }
     data.progress = (data.progress + data.physicsXVelocity * delta / 368) % 1;
-    data.physicsXVelocity *= Math.exp(-delta * 2.2);
+    const crashed = data.crashedUntil > clock.elapsedTime;
+    data.physicsXVelocity *= Math.exp(-delta * (crashed ? 0.72 : 2.2));
     data.physicsZ += data.physicsZVelocity * delta;
-    data.physicsZVelocity += (-data.physicsZ * 8 - data.physicsZVelocity * 4.5) * delta;
+    data.physicsZVelocity += crashed
+      ? -data.physicsZVelocity * 0.9 * delta
+      : (-data.physicsZ * 8 - data.physicsZVelocity * 4.5) * delta;
+    data.physicsY += data.physicsYVelocity * delta;
+    data.physicsYVelocity -= 24 * delta;
+    if (data.physicsY < 0) {
+      data.physicsY = 0;
+      if (Math.abs(data.physicsYVelocity) > 2.5) {
+        data.physicsYVelocity *= -0.24;
+      } else {
+        data.physicsYVelocity = 0;
+      }
+    }
     data.spin += data.spinVelocity * delta;
-    data.spinVelocity += (-data.spin * 7 - data.spinVelocity * 3.8) * delta;
+    data.spinVelocity *= Math.exp(-delta * (crashed ? 0.8 : 3.8));
+    data.pitch += data.pitchVelocity * delta;
+    data.roll += data.rollVelocity * delta;
+    data.pitchVelocity *= Math.exp(-delta * 1.15);
+    data.rollVelocity *= Math.exp(-delta * 1.05);
+    if (!crashed && data.physicsY === 0) {
+      data.pitch = THREE.MathUtils.lerp(data.pitch, 0, Math.min(delta * 5, 1));
+      data.roll = THREE.MathUtils.lerp(data.roll, 0, Math.min(delta * 5, 1));
+    }
   });
 
   if (state.pov !== "drive") return;
@@ -1547,6 +1679,24 @@ function updateCollisionPhysics(delta) {
     const energyLoss = THREE.MathUtils.clamp(impulse / 65, 0, 0.42);
     first.userData.speed *= 1 - energyLoss * 0.85;
     second.userData.speed *= 1 - energyLoss * 0.85;
+
+    [first, second].forEach((car, index) => {
+      const data = car.userData;
+      if (impulse < 9 || data.crashedUntil > clock.elapsedTime) return;
+      const direction = index === 0 ? -1 : 1;
+      const severity = THREE.MathUtils.clamp((impulse - 7) / 24, 0.15, 1);
+      data.physicsYVelocity = Math.max(data.physicsYVelocity, severity * 9.5);
+      data.rollVelocity += direction * hitSide * severity * 5.8;
+      data.pitchVelocity += direction * severity * 2.8;
+      data.spinVelocity += direction * hitSide * severity * 2.4;
+      if (car !== state.driverCar) {
+        data.crashedUntil = clock.elapsedTime + 10;
+        data.speed = 0;
+        data.targetSpeed = 0;
+        data.intendedLane = null;
+        data.indicatorSide = null;
+      }
+    });
     }
   }
 }
@@ -1727,6 +1877,7 @@ function applySetting(setting) {
 }
 
 function updateTraffic(delta) {
+  updateCrashNavigation();
   state.cars.forEach((car) => updateLaneChangeIntent(car, delta));
   updateYieldingSpeeds();
   applyTurnSignalYielding();
@@ -1737,6 +1888,7 @@ function updateTraffic(delta) {
   state.cars.forEach((car) => {
     if (car === state.driverCar && state.pov === "drive") return;
     const data = car.userData;
+    if (data.crashedUntil > clock.elapsedTime) return;
     data.progress = (data.progress + delta * data.speed * state.trafficSpeed * data.dir) % 1;
   });
   state.lanes.forEach(enforceHardLaneClearance);
