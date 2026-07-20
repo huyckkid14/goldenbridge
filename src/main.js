@@ -1298,7 +1298,10 @@ function updateDriverAvoidance() {
     const data = car.userData;
     const longitudinal = (player.position.x - car.position.x) * data.dir;
     const lateral = Math.abs((playerData.currentZ + playerData.physicsZ) - (data.currentZ + data.physicsZ));
-    if (longitudinal <= 0 || longitudinal > 72 || lateral > 8.5) return;
+    // Adjacent lane centers are 6.5 units apart. Only brake or evade when the
+    // vehicle bodies genuinely share the same lateral path (including while
+    // either vehicle is crossing the divider).
+    if (longitudinal <= 0 || longitudinal > 72 || lateral > 3.9) return;
 
     const urgency = THREE.MathUtils.clamp(1 - longitudinal / 72, 0, 1);
     const targetLane = state.lanes[data.lane]?.neighbor;
