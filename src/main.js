@@ -1970,6 +1970,17 @@ function bindControls() {
 }
 
 function setDriveKey(event, pressed) {
+  // Always release physical driving inputs before handling mode-specific
+  // shortcuts. In particular, cruise control consumes ArrowUp to adjust its
+  // set speed, so its keyup must not leave a previously pressed throttle key
+  // latched in the driving-key set.
+  if (!pressed) {
+    state.drive.keys.delete(event.code);
+    if (event.code === "KeyW" || event.code === "ArrowUp") {
+      state.driverCar.userData.driveThrottle = 0;
+    }
+  }
+
   const signalModes = {
     KeyQ: "left",
     KeyE: "right",
@@ -2038,11 +2049,6 @@ function setDriveKey(event, pressed) {
   }
   if (pressed) {
     state.drive.keys.add(event.code);
-  } else {
-    state.drive.keys.delete(event.code);
-    if (event.code === "KeyW" || event.code === "ArrowUp") {
-      state.driverCar.userData.driveThrottle = 0;
-    }
   }
 }
 
