@@ -1642,16 +1642,24 @@ function updateCollisionPhysics(delta) {
         data.physicsYVelocity = 0;
       }
     }
+    if (crashed || data.physicsY > 0.02) {
+      data.spinVelocity *= Math.exp(-delta * 0.8);
+      data.pitchVelocity *= Math.exp(-delta * 1.15);
+      data.rollVelocity *= Math.exp(-delta * 1.05);
+    } else {
+      // Once a controllable car is back on its wheels, converge the collision
+      // body's rotation with its real driving heading instead of leaving a
+      // permanent visual yaw that makes steering appear reversed or crooked.
+      data.spin = Math.atan2(Math.sin(data.spin), Math.cos(data.spin));
+      data.pitch = Math.atan2(Math.sin(data.pitch), Math.cos(data.pitch));
+      data.roll = Math.atan2(Math.sin(data.roll), Math.cos(data.roll));
+      data.spinVelocity += (-data.spin * 8.5 - data.spinVelocity * 4.8) * delta;
+      data.pitchVelocity += (-data.pitch * 10 - data.pitchVelocity * 4.6) * delta;
+      data.rollVelocity += (-data.roll * 10 - data.rollVelocity * 4.4) * delta;
+    }
     data.spin += data.spinVelocity * delta;
-    data.spinVelocity *= Math.exp(-delta * (crashed ? 0.8 : 3.8));
     data.pitch += data.pitchVelocity * delta;
     data.roll += data.rollVelocity * delta;
-    data.pitchVelocity *= Math.exp(-delta * 1.15);
-    data.rollVelocity *= Math.exp(-delta * 1.05);
-    if (!crashed && data.physicsY === 0) {
-      data.pitch = THREE.MathUtils.lerp(data.pitch, 0, Math.min(delta * 5, 1));
-      data.roll = THREE.MathUtils.lerp(data.roll, 0, Math.min(delta * 5, 1));
-    }
   });
 
   if (state.pov !== "drive") return;
