@@ -459,6 +459,9 @@ function createTraffic() {
         isDriver: false,
         length: car.userData.length,
         mass: car.userData.mass,
+        collisionHalfWidth: 1.96,
+        collisionMinY: -0.4,
+        collisionMaxY: truck ? 3.15 : 2.85,
         physicsXVelocity: 0,
         physicsY: 0,
         physicsYVelocity: 0,
@@ -1586,6 +1589,24 @@ function vehicleVelocity(car) {
   );
 }
 
+function requiredGroundLift(car) {
+  const data = car.userData;
+  const halfWidth = data.collisionHalfWidth;
+  const halfHeight = (data.collisionMaxY - data.collisionMinY) * 0.5;
+  const centerY = (data.collisionMaxY + data.collisionMinY) * 0.5;
+  const halfLength = data.length * 0.5 + 0.65;
+  const cosPitch = Math.cos(data.pitch);
+  const sinPitch = Math.sin(data.pitch);
+  const cosRoll = Math.cos(data.roll);
+  const sinRoll = Math.sin(data.roll);
+  const rotatedCenterY = centerY * cosPitch * cosRoll;
+  const rotatedHalfHeight = Math.abs(sinRoll) * halfWidth
+    + Math.abs(cosPitch * cosRoll) * halfHeight
+    + Math.abs(sinPitch * cosRoll) * halfLength;
+  const rotatedLowestPoint = rotatedCenterY - rotatedHalfHeight;
+  return Math.max(0, data.collisionMinY - rotatedLowestPoint);
+}
+
 function updateCollisionPhysics(delta) {
   state.cars.forEach((car) => {
     const data = car.userData;
@@ -1642,15 +1663,16 @@ function updateCollisionPhysics(delta) {
       : (-data.physicsZ * 8 - data.physicsZVelocity * 4.5) * delta;
     data.physicsY += data.physicsYVelocity * delta;
     data.physicsYVelocity -= 24 * delta;
-    if (data.physicsY < 0) {
-      data.physicsY = 0;
+    const groundLift = requiredGroundLift(car);
+    if (data.physicsY < groundLift) {
+      data.physicsY = groundLift;
       if (Math.abs(data.physicsYVelocity) > 2.5) {
         data.physicsYVelocity *= -0.24;
       } else {
         data.physicsYVelocity = 0;
       }
     }
-    if (crashed || data.physicsY > 0.02) {
+    if (crashed || data.physicsY > groundLift + 0.02) {
       data.spinVelocity *= Math.exp(-delta * 0.8);
       data.pitchVelocity *= Math.exp(-delta * 1.15);
       data.rollVelocity *= Math.exp(-delta * 1.05);
