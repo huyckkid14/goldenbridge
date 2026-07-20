@@ -461,7 +461,7 @@ function createTraffic() {
         mass: car.userData.mass,
         collisionHalfWidth: 1.96,
         collisionMinY: -0.4,
-        collisionMaxY: truck ? 3.15 : 2.85,
+        collisionMaxY: car.userData.length > 8 ? 3.15 : 2.85,
         physicsXVelocity: 0,
         physicsY: 0,
         physicsYVelocity: 0,
