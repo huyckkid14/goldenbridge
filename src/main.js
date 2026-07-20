@@ -1155,13 +1155,25 @@ function updateBrakeLights() {
   });
 }
 
+function physicallyOccupiesLane(car, lane) {
+  const lateralPosition = car.userData.currentZ + (car.userData.physicsZ ?? 0);
+  return Math.abs(lateralPosition - lane.z) <= 3.3;
+}
+
 function updateYieldingSpeeds() {
   state.cars.forEach((car) => {
     if (car === state.driverCar && state.pov === "drive") return;
     const data = car.userData;
-    const lane = state.lanes[data.lane];
+    const lateralPosition = data.currentZ + (data.physicsZ ?? 0);
+    const lane = state.lanes
+      .filter((candidate) => candidate.dir === data.dir)
+      .reduce((nearest, candidate) => (
+        Math.abs(candidate.z - lateralPosition) < Math.abs(nearest.z - lateralPosition)
+          ? candidate
+          : nearest
+      ));
     const nearestAhead = lane.cars.reduce((nearest, other) => {
-      if (other === car) return nearest;
+      if (other === car || !physicallyOccupiesLane(other, lane)) return nearest;
       const distance = progressDistanceAhead(car, other);
       if (distance <= 0 || distance > 0.5) return nearest;
       return Math.min(nearest, distance);
@@ -1349,6 +1361,7 @@ function easeTrafficSpeeds(delta) {
 
 function enforceLaneSpacing(lane) {
   const cars = lane.cars
+    .filter((car) => physicallyOccupiesLane(car, lane))
     .map((car) => ({ car, progress: ((car.userData.progress % 1) + 1) % 1 }))
     .sort((a, b) => a.progress - b.progress);
 
@@ -1376,9 +1389,10 @@ function enforceTrafficClearance() {
       const ad = a.userData;
       const bd = b.userData;
       if (ad.dir !== bd.dir) continue;
-      const aLanes = [ad.lane, ad.targetLane];
-      const bLanes = [bd.lane, bd.targetLane];
-      if (!aLanes.some((laneId) => laneId !== null && bLanes.includes(laneId))) continue;
+      const lateralGap = Math.abs(
+        (ad.currentZ + (ad.physicsZ ?? 0)) - (bd.currentZ + (bd.physicsZ ?? 0)),
+      );
+      if (lateralGap > 3.9) continue;
 
       const gap = circularDistance(ad.progress, bd.progress);
       if (gap >= minProgressGap) continue;
@@ -1396,13 +1410,14 @@ function enforceTrafficClearance() {
 }
 
 function enforceHardLaneClearance(lane) {
-  if (lane.cars.length < 2) return;
+  const occupyingCars = lane.cars.filter((car) => physicallyOccupiesLane(car, lane));
+  if (occupyingCars.length < 2) return;
 
   // Work in a coordinate that always increases in the lane's travel direction.
   // If easing cannot slow a trailing car quickly enough, move it back to the
   // nearest physically safe point before rendering the frame.
-  for (let pass = 0; pass < lane.cars.length; pass += 1) {
-    const cars = lane.cars
+  for (let pass = 0; pass < occupyingCars.length; pass += 1) {
+    const cars = occupyingCars
       .map((car) => {
         const progress = ((car.userData.progress % 1) + 1) % 1;
         return { car, travel: lane.dir === 1 ? progress : (1 - progress) % 1 };
