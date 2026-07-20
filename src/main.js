@@ -1597,15 +1597,23 @@ function vehicleVelocity(car) {
 
 function requiredGroundLift(car) {
   const data = car.userData;
-  const cosPitch = Math.cos(data.pitch);
-  const sinPitch = Math.sin(data.pitch);
-  const cosRoll = Math.cos(data.roll);
-  const sinRoll = Math.sin(data.roll);
+  const pitchCos = Math.cos(data.pitch);
+  const pitchSin = Math.sin(data.pitch);
+  const yaw = (data.driveHeading ?? (data.dir === 1 ? Math.PI / 2 : Math.PI * 1.5))
+    + data.spin;
+  const yawCos = Math.cos(yaw);
+  const yawSin = Math.sin(yaw);
+  const rollCos = Math.cos(data.roll);
+  const rollSin = Math.sin(data.roll);
+  // World-Y row of the same XYZ Euler rotation matrix used by Three.js.
+  const worldYFromX = pitchCos * rollSin + pitchSin * rollCos * yawSin;
+  const worldYFromY = pitchCos * rollCos - pitchSin * rollSin * yawSin;
+  const worldYFromZ = -pitchSin * yawCos;
   const rotatedLowestPoint = data.collisionParts.reduce((lowest, part) => {
-    const centerY = (part.y * cosPitch - part.z * sinPitch) * cosRoll;
-    const halfHeight = Math.abs(sinRoll) * part.hx
-      + Math.abs(cosPitch * cosRoll) * part.hy
-      + Math.abs(sinPitch * cosRoll) * part.hz;
+    const centerY = worldYFromY * part.y + worldYFromZ * part.z;
+    const halfHeight = Math.abs(worldYFromX) * part.hx
+      + Math.abs(worldYFromY) * part.hy
+      + Math.abs(worldYFromZ) * part.hz;
     return Math.min(lowest, centerY - halfHeight);
   }, Infinity);
   return Math.max(0, -0.4 - rotatedLowestPoint);
