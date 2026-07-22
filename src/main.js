@@ -452,6 +452,7 @@ function createTraffic() {
         signalLights: car.userData.signalLights,
         frontSignalLights: car.userData.frontSignalLights,
         brakeLights: car.userData.brakeLights,
+        reverseLights: car.userData.reverseLights,
         bodyMaterial: car.userData.bodyMaterial,
         originalBodyColor: car.userData.originalBodyColor,
         ambulanceRig: car.userData.ambulanceRig,
@@ -480,6 +481,7 @@ function createTraffic() {
         driveLateralVelocity: 0,
         driveHeading: null,
         braking: false,
+        reversing: false,
       };
       updateCarPosition(car, 0);
       state.cars.push(car);
@@ -516,6 +518,7 @@ function createCar(color, truck = false) {
   group.userData.signalLights = [];
   group.userData.frontSignalLights = [];
   group.userData.brakeLights = [];
+  group.userData.reverseLights = [];
   const bodyMat = new THREE.MeshStandardMaterial({
     color,
     roughness: 0.36,
@@ -651,6 +654,20 @@ function createCar(color, truck = false) {
       false,
     ));
   });
+  [-0.82, 0.82].forEach((x) => {
+    const reverseMaterial = new THREE.MeshBasicMaterial({
+      color: 0x292929,
+      toneMapped: false,
+    });
+    group.userData.reverseLights.push(reverseMaterial);
+    group.add(makeMesh(
+      new THREE.BoxGeometry(0.34, 0.32, 0.25),
+      reverseMaterial,
+      new THREE.Vector3(x, 1.02, -length / 2 - 0.075),
+      false,
+      false,
+    ));
+  });
   group.traverse((item) => {
     if (item.isMesh) {
       item.castShadow = false;
@@ -698,6 +715,7 @@ function setDriveMode(enabled) {
     car.userData.driveSteer = 0;
     car.userData.steeringWheelAngle = 0;
     car.userData.driveThrottle = 0;
+    car.userData.reversing = false;
     car.userData.driveHeading = car.rotation.y;
     return;
   }
@@ -721,6 +739,7 @@ function setDriveMode(enabled) {
   data.driveSteer = 0;
   data.steeringWheelAngle = 0;
   data.driveThrottle = 0;
+  data.reversing = false;
   data.driveLateralVelocity = 0;
   data.driveHeading = null;
   steeringWheelEl.style.transform = "";
@@ -817,13 +836,14 @@ function updatePlayerDriving(delta) {
   const braking = keys.has("KeyS") || keys.has("ArrowDown");
   const targetSteer = Number(keys.has("KeyD") || keys.has("ArrowRight"))
     - Number(keys.has("KeyA") || keys.has("ArrowLeft"));
-  data.braking = braking;
+  data.braking = braking && data.speed > 0;
 
   if (braking && state.drive.cruise.active) {
     state.drive.cruise.active = false;
     state.drive.cruise.adaptive = false;
   }
-  const throttleTarget = (accelerating || state.drive.cruise.active) && !braking ? 1 : 0;
+  const reverseThrottle = braking && data.speed <= 0;
+  const throttleTarget = ((accelerating || state.drive.cruise.active) && !braking) || reverseThrottle ? 1 : 0;
   data.driveThrottle = throttleTarget === 0
     ? 0
     : THREE.MathUtils.lerp(
@@ -847,11 +867,20 @@ function updatePlayerDriving(delta) {
   steeringWheelEl.style.transform = `translateX(-50%) rotateX(18deg) rotateZ(${data.steeringWheelAngle}rad)`;
 
   if (braking) {
-    data.speed = Math.max(data.speed - delta * 0.13, 0);
+    if (data.speed > 0) {
+      data.speed = Math.max(data.speed - delta * 0.13, 0);
+    } else {
+      data.speed = Math.max(data.speed - delta * 0.038, -0.04);
+    }
     data.physicsXVelocity *= Math.exp(-delta * 5.5);
   } else if (accelerating) {
-    const acceleration = 0.025 + data.driveThrottle * 0.035;
-    data.speed = Math.min(data.speed + delta * acceleration, 0.105);
+    if (data.speed < 0) {
+      data.braking = true;
+      data.speed = Math.min(data.speed + delta * 0.13, 0);
+    } else {
+      const acceleration = 0.025 + data.driveThrottle * 0.035;
+      data.speed = Math.min(data.speed + delta * acceleration, 0.105);
+    }
   } else if (state.drive.cruise.active) {
     if (state.drive.cruise.adaptive) {
       const targetSpeed = getAdaptiveCruiseTargetSpeed(state.driverCar, state.drive.cruise.speed);
@@ -866,9 +895,12 @@ function updatePlayerDriving(delta) {
       data.speed = state.drive.cruise.speed;
     }
   } else {
-    data.speed = Math.max(data.speed - delta * 0.006, 0);
-    if (data.speed < 0.0015) data.speed = 0;
+    data.speed += data.speed > 0
+      ? -Math.min(data.speed, delta * 0.006)
+      : Math.min(-data.speed, delta * 0.01);
+    if (Math.abs(data.speed) < 0.0015) data.speed = 0;
   }
+  data.reversing = data.speed < -0.0005 || reverseThrottle;
 
   const roadWheelAngle = (data.steeringWheelAngle / steeringWheelLock) * THREE.MathUtils.degToRad(22);
   const speedUnits = data.speed * 368;
@@ -898,7 +930,8 @@ function updatePlayerDriving(delta) {
   const cruiseStatus = state.drive.cruise.active
     ? ` · ${state.drive.cruise.adaptive ? "ADAPTIVE" : "CRUISE"} ${Math.round(state.drive.cruise.speed * 760)} mph`
     : "";
-  statusEl.textContent = `YOU DRIVE · ${displaySpeed} mph${displaySpeed === 0 ? " · STOPPED" : ""}${cruiseStatus}`;
+  const gearStatus = data.reversing ? " · REVERSE" : (displaySpeed === 0 ? " · STOPPED" : "");
+  statusEl.textContent = `YOU DRIVE · ${displaySpeed} mph${gearStatus}${cruiseStatus}`;
   updateCenterLaneButton();
 }
 
@@ -1204,6 +1237,10 @@ function updateBrakeLights() {
     const braking = car.userData.braking;
     car.userData.brakeLights.forEach((material) => {
       material.color.setHex(braking ? 0xff0000 : 0x660000);
+    });
+    const reversing = car === state.driverCar && state.pov === "drive" && car.userData.reversing;
+    car.userData.reverseLights.forEach((material) => {
+      material.color.setHex(reversing ? 0xffffff : 0x292929);
     });
   });
 }
@@ -1643,7 +1680,7 @@ function enforceBridgeWallCollision(car) {
 }
 
 function updateCollisionPhysics(delta) {
-  state.cars.forEach((car) => {
+  state.cars.forEach((car, carIndex) => {
     const data = car.userData;
     if (data.crashedUntil && data.crashedUntil <= clock.elapsedTime) {
       const lateralPosition = data.currentZ + (data.physicsZ ?? 0);
@@ -1707,17 +1744,33 @@ function updateCollisionPhysics(delta) {
         data.physicsYVelocity = 0;
       }
     }
-    if (crashed || data.physicsY > groundLift + 0.02) {
+    data.pitch = Math.atan2(Math.sin(data.pitch), Math.cos(data.pitch));
+    data.roll = Math.atan2(Math.sin(data.roll), Math.cos(data.roll));
+    const airborne = data.physicsY > groundLift + 0.02;
+    const majorTilt = Math.abs(data.pitch) > 0.7 || Math.abs(data.roll) > 0.7;
+    if (airborne) {
       data.spinVelocity *= Math.exp(-delta * 0.8);
       data.pitchVelocity *= Math.exp(-delta * 1.15);
       data.rollVelocity *= Math.exp(-delta * 1.05);
+    } else if (crashed || majorTilt) {
+      // Gravity makes a car balanced on its nose or side topple toward a broad
+      // face. Do not use the player auto-level spring for these unstable poses.
+      data.spinVelocity *= Math.exp(-delta * 1.2);
+      data.pitchVelocity += -Math.sin(data.pitch * 2) * 5.5 * delta;
+      data.rollVelocity += -Math.sin(data.roll * 2) * 4.8 * delta;
+      if (Math.abs(Math.cos(data.pitch)) < 0.08 && Math.abs(data.pitchVelocity) < 0.18) {
+        data.pitchVelocity += (carIndex % 2 ? 1 : -1) * 0.7 * delta;
+      }
+      if (Math.abs(Math.cos(data.roll)) < 0.08 && Math.abs(data.rollVelocity) < 0.18) {
+        data.rollVelocity += (carIndex % 2 ? -1 : 1) * 0.7 * delta;
+      }
+      data.pitchVelocity *= Math.exp(-delta * 1.4);
+      data.rollVelocity *= Math.exp(-delta * 1.4);
     } else {
       // Once a controllable car is back on its wheels, converge the collision
       // body's rotation with its real driving heading instead of leaving a
       // permanent visual yaw that makes steering appear reversed or crooked.
       data.spin = Math.atan2(Math.sin(data.spin), Math.cos(data.spin));
-      data.pitch = Math.atan2(Math.sin(data.pitch), Math.cos(data.pitch));
-      data.roll = Math.atan2(Math.sin(data.roll), Math.cos(data.roll));
       data.spinVelocity += (-data.spin * 8.5 - data.spinVelocity * 4.8) * delta;
       data.pitchVelocity += (-data.pitch * 10 - data.pitchVelocity * 4.6) * delta;
       data.rollVelocity += (-data.roll * 10 - data.rollVelocity * 4.4) * delta;
@@ -2161,8 +2214,10 @@ function updateCamera(delta) {
 
   controls.enabled = false;
   const car = state.driverCar;
+  const reversing = state.pov === "drive" && car.userData.reversing;
   if (state.pov === "drive" && state.drive.camera === "normal") {
     const chaseForward = new THREE.Vector3(Math.sin(car.rotation.y), 0, Math.cos(car.rotation.y));
+    if (reversing) chaseForward.multiplyScalar(-1);
     const chasePosition = car.position
       .clone()
       .add(new THREE.Vector3(0, 8.5, 0))
@@ -2178,6 +2233,7 @@ function updateCamera(delta) {
   }
 
   const forward = new THREE.Vector3(Math.sin(car.rotation.y), 0, Math.cos(car.rotation.y));
+  if (reversing) forward.multiplyScalar(-1);
   const side = new THREE.Vector3(Math.cos(car.rotation.y), 0, -Math.sin(car.rotation.y));
   camera.position
     .copy(car.position)
