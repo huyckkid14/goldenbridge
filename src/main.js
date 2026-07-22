@@ -474,6 +474,8 @@ function createTraffic() {
         roll: 0,
         rollVelocity: 0,
         crashedUntil: 0,
+        backingUntil: 0,
+        lastHornAt: -Infinity,
         crossedYellowForWreck: null,
         returnLaneAfterWreck: null,
         driveSteer: 0,
@@ -1214,6 +1216,7 @@ function updateLaneChangeIntent(car, delta) {
   const data = car.userData;
   if (car === state.driverCar && state.pov === "drive") return;
   if (data.crashedUntil > clock.elapsedTime) return;
+  if (data.backingUntil > clock.elapsedTime) return;
   if (data.crossedYellowForWreck !== null) return;
   if (data.changingLane) return;
   if (state.drive.ambulance && !data.ambulanceYielding) {
@@ -1303,7 +1306,7 @@ function updateBrakeLights() {
     car.userData.brakeLights.forEach((material) => {
       material.color.setHex(braking ? 0xff0000 : 0x660000);
     });
-    const reversing = car === state.driverCar && state.pov === "drive" && car.userData.reversing;
+    const reversing = car.userData.reversing;
     car.userData.reverseLights.forEach((material) => {
       material.color.setHex(reversing ? 0xffffff : 0x292929);
     });
@@ -1323,6 +1326,12 @@ function updateYieldingSpeeds() {
       data.targetSpeed = 0;
       return;
     }
+    if (data.backingUntil > clock.elapsedTime) {
+      data.targetSpeed = -0.026;
+      data.reversing = true;
+      return;
+    }
+    if (car !== state.driverCar) data.reversing = false;
     const lateralPosition = data.currentZ + (data.physicsZ ?? 0);
     const lane = state.lanes
       .filter((candidate) => candidate.dir === data.dir)
@@ -1681,6 +1690,63 @@ function updateCrashNavigation() {
       data.targetSpeed = Math.min(data.targetSpeed, data.baseSpeed * blend * 0.7);
     }
   });
+}
+
+function hasClearReverseSpace(car, requiredDistance = 24) {
+  const data = car.userData;
+  const heading = data.dir === 1 ? Math.PI / 2 : Math.PI * 1.5;
+  const forwardX = Math.sin(heading);
+  const forwardZ = Math.cos(heading);
+  return state.cars.every((other) => {
+    if (other === car || other === state.driverCar) return true;
+    const dx = other.position.x - car.position.x;
+    const dz = other.position.z - car.position.z;
+    const behindDistance = -(dx * forwardX + dz * forwardZ);
+    const lateralDistance = Math.abs(dx * forwardZ - dz * forwardX);
+    return behindDistance <= 0 || behindDistance >= requiredDistance || lateralDistance > 4.2;
+  });
+}
+
+function updateReverseWarnings() {
+  if (state.pov !== "drive") return;
+  const player = state.driverCar;
+  const playerData = player.userData;
+  if (!playerData.reversing || playerData.speed >= -0.0005) return;
+
+  const forwardX = Math.sin(playerData.driveHeading);
+  const forwardZ = Math.cos(playerData.driveHeading);
+  const threatenedBot = state.cars
+    .filter((car) => car !== player && car.userData.crashedUntil <= clock.elapsedTime)
+    .map((car) => {
+      const dx = car.position.x - player.position.x;
+      const dz = car.position.z - player.position.z;
+      return {
+        car,
+        rearDistance: -(dx * forwardX + dz * forwardZ),
+        lateralDistance: Math.abs(dx * forwardZ - dz * forwardX),
+      };
+    })
+    .filter(({ car, rearDistance, lateralDistance }) => (
+      rearDistance > 0
+      && rearDistance < 34
+      && lateralDistance < 4.3
+      && Math.cos((car.userData.driveHeading ?? car.rotation.y) - playerData.driveHeading) > 0.35
+    ))
+    .sort((a, b) => a.rearDistance - b.rearDistance)[0];
+  if (!threatenedBot) return;
+
+  const botData = threatenedBot.car.userData;
+  if (clock.elapsedTime - botData.lastHornAt > 0.68) {
+    botData.lastHornAt = clock.elapsedTime;
+    playBotHorn(threatenedBot.rearDistance);
+  }
+  if (threatenedBot.rearDistance < 18 && hasClearReverseSpace(threatenedBot.car)) {
+    botData.backingUntil = clock.elapsedTime + 0.85;
+    botData.targetSpeed = -0.026;
+    botData.reversing = true;
+    botData.intendedLane = null;
+    botData.indicatorSide = null;
+  }
 }
 
 function vehicleVelocity(car) {
@@ -2101,6 +2167,7 @@ function applySetting(setting) {
 
 function updateTraffic(delta) {
   updateCrashNavigation();
+  updateReverseWarnings();
   state.cars.forEach((car) => updateLaneChangeIntent(car, delta));
   updateYieldingSpeeds();
   applyTurnSignalYielding();
@@ -2238,6 +2305,28 @@ function playControlClick() {
   click.connect(gain).connect(state.audio.master);
   click.start();
   click.stop(context.currentTime + 0.09);
+}
+
+function playBotHorn(distance) {
+  if (!state.audio.enabled || !state.audio.context || !state.audio.master) return;
+  const context = state.audio.context;
+  const now = context.currentTime;
+  const gain = context.createGain();
+  const proximity = THREE.MathUtils.clamp(1 - distance / 38, 0.25, 1);
+  gain.gain.setValueAtTime(0.001, now);
+  gain.gain.exponentialRampToValueAtTime(0.13 * proximity, now + 0.018);
+  gain.gain.setValueAtTime(0.13 * proximity, now + 0.23);
+  gain.gain.exponentialRampToValueAtTime(0.001, now + 0.34);
+  gain.connect(state.audio.master);
+
+  [315, 405].forEach((frequency) => {
+    const horn = context.createOscillator();
+    horn.type = "square";
+    horn.frequency.setValueAtTime(frequency, now);
+    horn.connect(gain);
+    horn.start(now);
+    horn.stop(now + 0.35);
+  });
 }
 
 function updateAudio(delta) {
