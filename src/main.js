@@ -1327,7 +1327,7 @@ function updateYieldingSpeeds() {
       return;
     }
     if (data.backingUntil > clock.elapsedTime) {
-      data.targetSpeed = -0.026;
+      data.targetSpeed = -0.032;
       data.reversing = true;
       return;
     }
@@ -1359,6 +1359,7 @@ function updateYieldingSpeeds() {
 
   state.cars.forEach((mergingCar) => {
     const merge = mergingCar.userData;
+    if (merge.backingUntil > clock.elapsedTime) return;
     if (!merge.changingLane || merge.targetLane === null) return;
 
     merge.targetSpeed = merge.baseSpeed * 0.76;
@@ -1524,6 +1525,15 @@ function easeTrafficSpeeds(delta) {
   state.cars.forEach((car) => {
     if (car === state.driverCar && state.pov === "drive") return;
     const data = car.userData;
+    if (data.backingUntil > clock.elapsedTime) {
+      data.braking = data.speed > 0;
+      data.speed += THREE.MathUtils.clamp(
+        data.targetSpeed - data.speed,
+        -delta * 0.16,
+        delta * 0.16,
+      );
+      return;
+    }
     data.braking = data.targetSpeed < data.speed - 0.0005;
     const easing = data.targetSpeed < data.speed ? 0.7 : 1.15;
     data.speed = THREE.MathUtils.lerp(data.speed, data.targetSpeed, Math.min(delta * easing, 1));
@@ -1692,26 +1702,11 @@ function updateCrashNavigation() {
   });
 }
 
-function hasClearReverseSpace(car, requiredDistance = 24) {
-  const data = car.userData;
-  const heading = data.dir === 1 ? Math.PI / 2 : Math.PI * 1.5;
-  const forwardX = Math.sin(heading);
-  const forwardZ = Math.cos(heading);
-  return state.cars.every((other) => {
-    if (other === car || other === state.driverCar) return true;
-    const dx = other.position.x - car.position.x;
-    const dz = other.position.z - car.position.z;
-    const behindDistance = -(dx * forwardX + dz * forwardZ);
-    const lateralDistance = Math.abs(dx * forwardZ - dz * forwardX);
-    return behindDistance <= 0 || behindDistance >= requiredDistance || lateralDistance > 4.2;
-  });
-}
-
 function updateReverseWarnings() {
   if (state.pov !== "drive") return;
   const player = state.driverCar;
   const playerData = player.userData;
-  if (!playerData.reversing || playerData.speed >= -0.0005) return;
+  if (!playerData.reversing) return;
 
   const forwardX = Math.sin(playerData.driveHeading);
   const forwardZ = Math.cos(playerData.driveHeading);
@@ -1730,7 +1725,6 @@ function updateReverseWarnings() {
       rearDistance > 0
       && rearDistance < 34
       && lateralDistance < 4.3
-      && Math.cos((car.userData.driveHeading ?? car.rotation.y) - playerData.driveHeading) > 0.35
     ))
     .sort((a, b) => a.rearDistance - b.rearDistance)[0];
   if (!threatenedBot) return;
@@ -1740,9 +1734,9 @@ function updateReverseWarnings() {
     botData.lastHornAt = clock.elapsedTime;
     playBotHorn(threatenedBot.rearDistance);
   }
-  if (threatenedBot.rearDistance < 18 && hasClearReverseSpace(threatenedBot.car)) {
-    botData.backingUntil = clock.elapsedTime + 0.85;
-    botData.targetSpeed = -0.026;
+  if (threatenedBot.rearDistance < 21) {
+    botData.backingUntil = clock.elapsedTime + 1.05;
+    botData.targetSpeed = -0.032;
     botData.reversing = true;
     botData.intendedLane = null;
     botData.indicatorSide = null;
@@ -2312,20 +2306,26 @@ function playBotHorn(distance) {
   const context = state.audio.context;
   const now = context.currentTime;
   const gain = context.createGain();
+  const hornFilter = context.createBiquadFilter();
   const proximity = THREE.MathUtils.clamp(1 - distance / 38, 0.25, 1);
+  hornFilter.type = "lowpass";
+  hornFilter.frequency.setValueAtTime(1350, now);
+  hornFilter.Q.value = 1.4;
   gain.gain.setValueAtTime(0.001, now);
-  gain.gain.exponentialRampToValueAtTime(0.13 * proximity, now + 0.018);
-  gain.gain.setValueAtTime(0.13 * proximity, now + 0.23);
-  gain.gain.exponentialRampToValueAtTime(0.001, now + 0.34);
+  gain.gain.exponentialRampToValueAtTime(0.105 * proximity, now + 0.035);
+  gain.gain.setValueAtTime(0.105 * proximity, now + 0.28);
+  gain.gain.exponentialRampToValueAtTime(0.001, now + 0.39);
+  hornFilter.connect(gain);
   gain.connect(state.audio.master);
 
-  [315, 405].forEach((frequency) => {
+  [365, 455].forEach((frequency, index) => {
     const horn = context.createOscillator();
-    horn.type = "square";
-    horn.frequency.setValueAtTime(frequency, now);
-    horn.connect(gain);
+    horn.type = index === 0 ? "sawtooth" : "triangle";
+    horn.frequency.setValueAtTime(frequency * 0.985, now);
+    horn.frequency.linearRampToValueAtTime(frequency, now + 0.045);
+    horn.connect(hornFilter);
     horn.start(now);
-    horn.stop(now + 0.35);
+    horn.stop(now + 0.4);
   });
 }
 
