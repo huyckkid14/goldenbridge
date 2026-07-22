@@ -9,6 +9,7 @@ const driveHelpEl = document.querySelector("#driveHelp");
 const driveCameraButton = document.querySelector("#driveCameraButton");
 const ambulanceButton = document.querySelector("#ambulanceButton");
 const centerLaneButton = document.querySelector("#centerLaneButton");
+const resetCarButton = document.querySelector("#resetCarButton");
 const soundButton = document.querySelector("#soundControls button");
 const steeringWheelEl = document.querySelector(".wheel");
 const fpsOverlay = document.querySelector("#fpsOverlay");
@@ -933,6 +934,7 @@ function updatePlayerDriving(delta) {
   const gearStatus = data.reversing ? " · REVERSE" : (displaySpeed === 0 ? " · STOPPED" : "");
   statusEl.textContent = `YOU DRIVE · ${displaySpeed} mph${gearStatus}${cruiseStatus}`;
   updateCenterLaneButton();
+  updateResetCarButton();
 }
 
 function getClearlyOccupiedLane() {
@@ -981,6 +983,69 @@ function centerPlayerInLane() {
   steeringWheelEl.style.transform = "translateX(-50%) rotateX(18deg) rotateZ(0rad)";
   statusEl.textContent = "Centered and straightened in lane";
   updateCenterLaneButton();
+}
+
+function playerUpwardAlignment() {
+  const data = state.driverCar.userData;
+  const yaw = data.driveHeading + data.spin;
+  return Math.cos(data.pitch) * Math.cos(data.roll)
+    - Math.sin(data.pitch) * Math.sin(data.roll) * Math.sin(yaw);
+}
+
+function updateResetCarButton() {
+  const overturned = state.pov === "drive" && playerUpwardAlignment() < 0.58;
+  resetCarButton.disabled = !overturned;
+  resetCarButton.title = overturned
+    ? "Stop and place the car upright in the nearest lane"
+    : "Available when the car is on its side or upside down";
+}
+
+function resetPlayerCar() {
+  if (state.pov !== "drive" || resetCarButton.disabled) return;
+  const car = state.driverCar;
+  const data = car.userData;
+  const direction = Math.sin(data.driveHeading) >= 0 ? 1 : -1;
+  const lateralPosition = data.currentZ + data.physicsZ;
+  const lane = state.lanes
+    .filter((candidate) => candidate.dir === direction)
+    .sort((a, b) => Math.abs(a.z - lateralPosition) - Math.abs(b.z - lateralPosition))[0];
+
+  releaseDriveInputs();
+  state.drive.cruise.active = false;
+  state.drive.cruise.adaptive = false;
+  state.drive.cruise.speed = 0;
+  state.drive.signal = null;
+  data.lane = lane.id;
+  data.dir = lane.dir;
+  data.z = lane.z;
+  data.currentZ = lane.z;
+  data.targetZ = lane.z;
+  data.targetLane = null;
+  data.intendedLane = null;
+  data.changingLane = false;
+  data.speed = 0;
+  data.targetSpeed = lane.speed;
+  data.reversing = false;
+  data.braking = false;
+  data.physicsXVelocity = 0;
+  data.physicsY = 0;
+  data.physicsYVelocity = 0;
+  data.physicsZ = 0;
+  data.physicsZVelocity = 0;
+  data.spin = 0;
+  data.spinVelocity = 0;
+  data.pitch = 0;
+  data.pitchVelocity = 0;
+  data.roll = 0;
+  data.rollVelocity = 0;
+  data.driveLateralVelocity = 0;
+  data.driveSteer = 0;
+  data.steeringWheelAngle = 0;
+  data.driveHeading = lane.dir === 1 ? Math.PI / 2 : Math.PI * 1.5;
+  steeringWheelEl.style.transform = "translateX(-50%) rotateX(18deg) rotateZ(0rad)";
+  statusEl.textContent = "Car reset upright";
+  updateCenterLaneButton();
+  updateResetCarButton();
 }
 
 function circularDistance(a, b) {
@@ -2315,6 +2380,11 @@ function bindControls() {
 
   centerLaneButton.addEventListener("click", () => {
     centerPlayerInLane();
+    playControlClick();
+  });
+
+  resetCarButton.addEventListener("click", () => {
+    resetPlayerCar();
     playControlClick();
   });
 }
